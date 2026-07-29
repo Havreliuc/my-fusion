@@ -47,6 +47,7 @@ import {
   TransitionRejectionError,
   resolveWorkflowIrForTask,
   isUnplannedSeedPrompt,
+  isTaskBlockedOnApproval,
   type TaskStore,
   type Task,
   type WorkflowIr,
@@ -453,6 +454,22 @@ export async function runHoldReleaseSweep(
   for (const task of allTasks) {
     // Skip paused / recovery-backoff tasks exactly as the legacy scheduler does.
     if (task.paused || task.userPaused) {
+      continue;
+    }
+    /*
+    FNXC:PlanApproval 2026-07-29-16:10:
+    A card waiting for the operator's plan approval must never be released by this sweep.
+    `isTaskBlockedOnApproval` existed and was honored by the overseer and the merge gate, but
+    the hold/release sweep never consulted it, so with planApprovalMode="require-all" triage
+    parked the card at `awaiting-approval` and roughly a poll later the capacity sweep moved it
+    on to `todo` regardless. The operator gate was therefore unenforced for every card that
+    reached a hold column, and worse, the approve-plan route requires the card to still be in
+    `triage` — so by the time the operator clicked Approve Plan the server rejected it with
+    "Task must be in 'triage' column", no approval fingerprint was ever recorded, and the only
+    way to move the card was Promote (which waives the gate instead of satisfying it).
+    */
+    if (isTaskBlockedOnApproval(task)) {
+      result.held.push({ taskId: task.id, reason: "awaiting-plan-approval" });
       continue;
     }
     if (task.nextRecoveryAt && Date.parse(task.nextRecoveryAt) > deps.now()) {
