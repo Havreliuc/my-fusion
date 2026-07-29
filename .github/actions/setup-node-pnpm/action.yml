@@ -1,0 +1,45 @@
+name: setup-node-pnpm
+description: "Install pnpm, setup Node.js, install dependencies"
+inputs:
+  node-version:
+    description: Node.js version
+    required: false
+    default: "24"
+  install-args:
+    description: Arguments passed to pnpm install
+    required: false
+    default: "--frozen-lockfile"
+  registry-url:
+    description: Optional npm registry URL passed to actions/setup-node
+    required: false
+    default: ""
+  skip-install:
+    description: Set to 'true' to skip the pnpm install step; caller runs install themselves
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: Install pnpm
+      uses: pnpm/action-setup@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v5
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: pnpm
+        registry-url: ${{ inputs.registry-url }}
+
+    # Do NOT cache the linked node_modules tree. pnpm builds node_modules from
+    # symlinks/junctions into the content-addressable store, and actions/cache does
+    # not preserve Windows junctions across its tar/restore — a restored tree has
+    # broken peer links (e.g. @vitejs/plugin-react can't resolve its `vite` peer →
+    # ERR_MODULE_NOT_FOUND), which silently broke the Windows release build. The
+    # pnpm *store* is already cached by actions/setup-node above (`cache: pnpm`), so
+    # `pnpm install --frozen-lockfile` is fast with a warm store and relinks
+    # correctly per-OS/arch every time (also fixing the prior arch-key and per-job
+    # cache-race issues this node_modules cache was patched for).
+    - name: Install dependencies
+      if: ${{ inputs.skip-install != 'true' }}
+      shell: bash
+      run: pnpm install ${{ inputs.install-args }}
