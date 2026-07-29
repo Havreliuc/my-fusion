@@ -3586,10 +3586,17 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       }
 
       // Move to todo and clear status
+      /*
+      FNXC:PlanApproval 2026-07-29-14:35:
+      updateTask's clear sentinel is null — undefined means "field not provided" and is
+      ignored (task-update.ts). Passing `status: undefined` here left every approved task
+      stuck at awaiting-approval in Todo, where the scheduler refuses to dispatch it, so
+      require-all plan approval could never release a card. Clear with null.
+      */
       const reboundColumn = await resolveReboundColumnForTask(scopedStore, task.id);
       const updated = await scopedStore.moveTask(task.id, reboundColumn);
       await scopedStore.updateTask(task.id, {
-        status: undefined,
+        status: null,
         ...(approvedPlanFingerprint ? { approvedPlanFingerprint } : {}),
       });
 
@@ -3631,7 +3638,11 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
        * clear and PROMPT.md removal, so the regenerated plan is always treated as new and
        * requires fresh manual approval (it must never inherit the rejected plan's fingerprint).
        */
-      await scopedStore.updateTask(task.id, { status: undefined, approvedPlanFingerprint: null });
+      /*
+      FNXC:PlanApproval 2026-07-29-14:35:
+      Same clear-sentinel fix as approve-plan above: null clears, undefined is ignored.
+      */
+      await scopedStore.updateTask(task.id, { status: null, approvedPlanFingerprint: null });
 
       // Remove PROMPT.md to force regeneration
       const { rm } = await import("node:fs/promises");

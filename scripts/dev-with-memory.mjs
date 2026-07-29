@@ -15,6 +15,28 @@ import {
   parseDevWrapperArgs,
   resolvePrebuildMode,
 } from "./dev-with-memory-lib.mjs";
+import { existsSync, readFileSync } from "node:fs";
+import { parseEnv } from "node:util";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/*
+FNXC:DevEnvFile 2026-07-29-14:20:
+Load a repo-root .env into the dev environment so per-machine settings (e.g. DATABASE_URL
+for an external PostgreSQL) don't have to be exported in every shell. Uses Node's built-in
+util.parseEnv — no dotenv dependency. Precedence is explicit: variables already present in
+the real environment win over .env values, so one-off shell overrides keep working.
+Loaded before MEMORY_MB below so FUSION_DEV_MEMORY_MB can also come from .env. The spawned
+CLI child inherits via the existing { ...process.env } spread. .env is gitignored.
+*/
+const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const envFilePath = join(repoRoot, ".env");
+if (existsSync(envFilePath)) {
+  const parsed = parseEnv(readFileSync(envFilePath, "utf8"));
+  for (const [key, value] of Object.entries(parsed)) {
+    if (process.env[key] === undefined) process.env[key] = value;
+  }
+}
 
 // Set increased heap size (8GB) to prevent OOM during initial build/start
 const MEMORY_MB = process.env.FUSION_DEV_MEMORY_MB || "8192";
