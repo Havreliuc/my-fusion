@@ -49,7 +49,7 @@ describe("branch-selection", () => {
   });
 
   it("derives a per-task branch suffix", () => {
-    expect(derivePerTaskBranch("feature/planning", "FN-123 add parser")).toBe("feature/planning/fn-123-add-parser");
+    expect(derivePerTaskBranch("feature/planning", "FN-123 add parser")).toBe("feature/planning-fn-123-add-parser");
     expect(derivePerTaskBranch(undefined, "FN-123")).toBeUndefined();
   });
 
@@ -71,7 +71,7 @@ describe("branch-selection", () => {
       resolvedBranch: "feature/planning",
       taskSegment: "FN-123 add parser",
     })).toEqual({
-      workingBranch: "feature/planning/fn-123-add-parser",
+      workingBranch: "feature/planning-fn-123-add-parser",
       mergeTargetBranch: "feature/planning",
     });
   });
