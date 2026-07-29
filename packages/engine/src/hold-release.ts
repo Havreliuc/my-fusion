@@ -175,7 +175,30 @@ export async function isUnplannedForExecution(store: TaskStore, task: Task, ir: 
     const legacyPassed = task.workflowStepResults?.some(
       (result) => result.workflowStepId === PLAN_REVIEW_GROUP_ID && result.status === "passed",
     );
-    if (!legacyPassed) {
+    /*
+    FNXC:WorkflowScheduling 2026-07-29-15:50:
+    Two ways this pre-release gate becomes UNSATISFIABLE, both of which parked cards in `todo`
+    forever with no error and no audit event — releasable only by an operator pressing Promote
+    on every single ticket:
+
+    1. Plan Review is DISABLED for the task (`enabledWorkflowSteps` excludes plan-review, which
+       is what mission/slice creates produce). A disabled group never records a step result, so
+       `legacyPassed` can never become true. The durable-continuation fallback below only helps
+       when work items exist; a project whose graph has never seeded one has no second path.
+    2. The project requires manual plan approval. The card parks at `awaiting-approval` BEFORE
+       Plan Review runs, and approving moves it straight to `todo` — so the AI review never runs
+       and its result never appears, while the operator has already reviewed the plan by hand.
+
+    Treat both as satisfying the gate: a disabled review is not a skipped review, and an operator
+    approval of this exact plan (fingerprint recorded by the approve-plan route) is a stronger
+    signal than the AI reviewer this gate exists to protect. A card whose Plan Review is enabled
+    AND unapproved still waits, which is the case the gate was written for.
+    */
+    const reviewDisabledForTask = Array.isArray(task.enabledWorkflowSteps)
+      && !task.enabledWorkflowSteps.includes(PLAN_REVIEW_GROUP_ID);
+    const operatorApprovedThisPlan = typeof task.approvedPlanFingerprint === "string"
+      && task.approvedPlanFingerprint.length > 0;
+    if (!legacyPassed && !reviewDisabledForTask && !operatorApprovedThisPlan) {
       if (typeof store.listWorkflowWorkItemsForTask !== "function") return true;
       const continuations = await store.listWorkflowWorkItemsForTask(task.id, { kinds: ["task"] });
       const active = continuations.filter((item) => ACTIVE_WORKFLOW_WORK_ITEM_STATES.includes(item.state));

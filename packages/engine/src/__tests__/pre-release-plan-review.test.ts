@@ -50,4 +50,29 @@ describe("pre-release Plan Review readiness", () => {
     item.waitReason = "planning";
     await expect(isUnplannedForExecution(store, task, workflow())).resolves.toBe(true);
   });
+
+  /*
+  FNXC:WorkflowScheduling 2026-07-29-15:50:
+  The gate must not be UNSATISFIABLE. Both shapes below produced a card parked in `todo`
+  forever — no error, no audit event — releasable only by an operator pressing Promote on
+  every ticket. Neither can ever record a passed plan-review result, and a project whose
+  graph has never seeded a work item has no continuation to fall back on (the store stub
+  here returns none, matching that state).
+  */
+  const noWorkItemsStore = { listWorkflowWorkItemsForTask: async () => [] } as any;
+
+  it("releases when Plan Review is disabled for the task (mission/slice creates)", async () => {
+    const task = { id: "T-5", column: "todo", enabledWorkflowSteps: [] } as any;
+    await expect(isUnplannedForExecution(noWorkItemsStore, task, workflow())).resolves.toBe(false);
+  });
+
+  it("releases when the operator approved this exact plan (require-all approval)", async () => {
+    const task = { id: "T-6", column: "todo", enabledWorkflowSteps: ["plan-review"], approvedPlanFingerprint: "sha-abc" } as any;
+    await expect(isUnplannedForExecution(noWorkItemsStore, task, workflow())).resolves.toBe(false);
+  });
+
+  it("still holds an enabled, unapproved, unreviewed card — the case the gate exists for", async () => {
+    const task = { id: "T-7", column: "todo", enabledWorkflowSteps: ["plan-review"] } as any;
+    await expect(isUnplannedForExecution(noWorkItemsStore, task, workflow())).resolves.toBe(true);
+  });
 });
