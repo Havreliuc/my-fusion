@@ -189,7 +189,9 @@ pnpm verify:workspace  # deep opt-in verification (lint -> test:full -> build); 
 
 ### Port 4040 is Reserved
 
-Never kill processes on port 4040 and never start test servers on 4040. Use `--port 0` or another free port.
+Never start test servers on 4040. Use `--port 0` or another free port.
+
+**Fork override (operator, 2026-07-29):** agents MAY kill processes on port 4040. 4040 is this operator's own Fusion dashboard, and restarting it is a normal part of loading a code change; the original blanket ban meant an orphaned dashboard could only be cleared by hand. Prefer `Ctrl+C` in the owning terminal when one exists — the dev TUI restores terminal modes on a clean exit, whereas `kill` leaves the terminal in raw/application-cursor mode needing `reset`. Kill by PID (`lsof -nP -iTCP:4040 -sTCP:LISTEN`) when the process has been orphaned from its wrapper, and remember `pnpm dev` runs a supervising wrapper plus a child: killing only the wrapper re-parents the child to init and it keeps serving.
 
 ### Never run an unbounded `find` against the system temp directory
 

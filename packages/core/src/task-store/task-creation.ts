@@ -15,6 +15,7 @@ import {randomUUID} from "node:crypto";
 import type {Task, TaskCreateInput, Settings} from "../types.js";
 import "../builtin-traits.js";
 import {applyReviewLevelPreset} from "../review-level-preset.js";
+import {DEFAULT_WORKFLOW_ID} from "../builtin-workflows.js";
 import {normalizeTaskPriority} from "../task-priority.js";
 import {sanitizeTitle, summarizeTitle} from "../ai-summarize.js";
 import {extractTaskIdTokens, normalizeTitleForTaskId} from "../task-title-id-drift.js";
@@ -194,10 +195,65 @@ export async function createTaskBackendImpl(store: TaskStore, input: TaskCreateI
           });
         }
       }
-    } else if (input.enabledWorkflowSteps.length === 0) {
-      // FNXC:WorkflowOptionalSteps 2026-06-29-02:55: an explicit empty
-      // optional-step selection must hydrate back as [], not undefined.
-      resolvedWorkflowSteps = [];
+    } else {
+      /*
+      FNXC:WorkflowCreation 2026-07-29-15:20:
+      A create that supplies enabledWorkflowSteps WITHOUT a workflowId (the mission/slice task
+      path does exactly this, passing []) fell through both branches above and persisted NO
+      task_workflow_selection row. The task then had no resolvable workflow, so the graph never
+      seeded a work item: the card sat in Todo with no error, no audit event and no dispatch,
+      releasable only by an operator pressing Promote. Same defect class as the 2026-07-05 note
+      above (which fixed "BOTH workflowId and enabledWorkflowSteps"); the enabledWorkflowSteps-only
+      case was missed. Inherit the project default workflow for the SELECTION while keeping the
+      caller's explicit step overrides.
+      */
+      if (input.enabledWorkflowSteps.length === 0) {
+        // FNXC:WorkflowOptionalSteps 2026-06-29-02:55: an explicit empty
+        // optional-step selection must hydrate back as [], not undefined.
+        resolvedWorkflowSteps = [];
+      }
+      try {
+        const inherited = await store.materializeDefaultWorkflowSteps();
+        if (inherited) {
+          resolvedEntryColumn = inherited.entryColumnId;
+          pendingWorkflowSelection = {
+            workflowId: inherited.workflowId,
+            stepIds: resolvedWorkflowSteps ?? [],
+          };
+        }
+      } catch (err) {
+        storeLog.warn("Failed to inherit default workflow for an explicit-step create; task will have no workflow selection", {
+          phase: "createTask:default-workflow-selection",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    /*
+    FNXC:WorkflowCreation 2026-07-29-15:35:
+    Last-resort selection guarantee. `materializeDefaultWorkflowSteps()` yields nothing when the
+    project has NO default workflow configured (the state a freshly registered project is in), so
+    without this every create in such a project produced a task with no `task_workflow_selection`
+    row — the graph then never seeded a work item and the card rested in Todo with no error and no
+    dispatch until an operator pressed Promote. The invariant is that a created task ALWAYS has a
+    resolvable workflow; fall back to the built-in default id rather than leaving it unset. An
+    explicit `workflowId: null` ("No workflow") is honored and deliberately not backfilled here.
+    */
+    if (!pendingWorkflowSelection && input.workflowId !== null) {
+      try {
+        const fallback = await store.materializeExplicitWorkflowSteps(DEFAULT_WORKFLOW_ID);
+        resolvedEntryColumn = resolvedEntryColumn ?? fallback.entryColumnId;
+        resolvedWorkflowSteps = resolvedWorkflowSteps ?? fallback.stepIds;
+        pendingWorkflowSelection = {
+          workflowId: fallback.workflowId,
+          stepIds: resolvedWorkflowSteps ?? fallback.stepIds,
+        };
+      } catch (err) {
+        storeLog.warn("Failed to apply the built-in fallback workflow selection during task creation", {
+          phase: "createTask:builtin-fallback-selection",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
     // FNXC:RuntimeTaskOrchestrationAsync 2026-06-24-13:20:
@@ -695,10 +751,65 @@ export async function createTaskImpl(store: TaskStore, input: TaskCreateInput, o
           });
         }
       }
-    } else if (input.enabledWorkflowSteps.length === 0) {
-      // FNXC:WorkflowOptionalSteps 2026-06-29-02:55: an explicit empty
-      // optional-step selection must hydrate back as [], not undefined.
-      resolvedWorkflowSteps = [];
+    } else {
+      /*
+      FNXC:WorkflowCreation 2026-07-29-15:20:
+      A create that supplies enabledWorkflowSteps WITHOUT a workflowId (the mission/slice task
+      path does exactly this, passing []) fell through both branches above and persisted NO
+      task_workflow_selection row. The task then had no resolvable workflow, so the graph never
+      seeded a work item: the card sat in Todo with no error, no audit event and no dispatch,
+      releasable only by an operator pressing Promote. Same defect class as the 2026-07-05 note
+      above (which fixed "BOTH workflowId and enabledWorkflowSteps"); the enabledWorkflowSteps-only
+      case was missed. Inherit the project default workflow for the SELECTION while keeping the
+      caller's explicit step overrides.
+      */
+      if (input.enabledWorkflowSteps.length === 0) {
+        // FNXC:WorkflowOptionalSteps 2026-06-29-02:55: an explicit empty
+        // optional-step selection must hydrate back as [], not undefined.
+        resolvedWorkflowSteps = [];
+      }
+      try {
+        const inherited = await store.materializeDefaultWorkflowSteps();
+        if (inherited) {
+          resolvedEntryColumn = inherited.entryColumnId;
+          pendingWorkflowSelection = {
+            workflowId: inherited.workflowId,
+            stepIds: resolvedWorkflowSteps ?? [],
+          };
+        }
+      } catch (err) {
+        storeLog.warn("Failed to inherit default workflow for an explicit-step create; task will have no workflow selection", {
+          phase: "createTask:default-workflow-selection",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    /*
+    FNXC:WorkflowCreation 2026-07-29-15:35:
+    Last-resort selection guarantee. `materializeDefaultWorkflowSteps()` yields nothing when the
+    project has NO default workflow configured (the state a freshly registered project is in), so
+    without this every create in such a project produced a task with no `task_workflow_selection`
+    row — the graph then never seeded a work item and the card rested in Todo with no error and no
+    dispatch until an operator pressed Promote. The invariant is that a created task ALWAYS has a
+    resolvable workflow; fall back to the built-in default id rather than leaving it unset. An
+    explicit `workflowId: null` ("No workflow") is honored and deliberately not backfilled here.
+    */
+    if (!pendingWorkflowSelection && input.workflowId !== null) {
+      try {
+        const fallback = await store.materializeExplicitWorkflowSteps(DEFAULT_WORKFLOW_ID);
+        resolvedEntryColumn = resolvedEntryColumn ?? fallback.entryColumnId;
+        resolvedWorkflowSteps = resolvedWorkflowSteps ?? fallback.stepIds;
+        pendingWorkflowSelection = {
+          workflowId: fallback.workflowId,
+          stepIds: resolvedWorkflowSteps ?? fallback.stepIds,
+        };
+      } catch (err) {
+        storeLog.warn("Failed to apply the built-in fallback workflow selection during task creation", {
+          phase: "createTask:builtin-fallback-selection",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
     let task: Task;
