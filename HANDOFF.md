@@ -30,6 +30,12 @@ Three tickets went from spec to merged code with passing tests in the sandbox: `
 
 Also: `.gitattributes` is LFS-free (upstream's LFS budget is exhausted; LFS-filtered checkouts broke every task worktree), and `AGENTS.md`'s port-4040 rule now permits agents to kill processes on 4040.
 
+## Open issue — pre-release Plan Review deadlock (NOT yet fixed)
+
+`fe5c23cea` made the pre-release Plan Review hold satisfiable for two shapes (review disabled; operator-approved). A **third** shape still deadlocks: plan-review **enabled**, no approval fingerprint, no review result. The gate waits for a plan-review result, but the pre-release review only runs once the card is dispatched — which the gate is blocking. Nothing breaks the cycle except an operator pressing **Promote** (observed on KB-005: sat in Todo ~5 min, moved only on Promote; the `passed` result in `workflow_step_results` was written *after* the promote, not before).
+
+Fix direction: make the pre-release Plan Review actually execute for a card resting in the hold column (so the result can exist), rather than widening the gate further — the gate has now been widened twice and each widening weakens the review it exists to enforce. Relevant code: `isUnplannedForExecution` and `runHoldReleaseSweep` in `packages/engine/src/hold-release.ts`; the runner side is the graph's pre-release node traversal.
+
 ## Open issue — mission validator loop (NOT yet fixed)
 
 Mission `M-MS60X8XN-0003-0NTD` has 3 features stuck at `in-progress` whose tasks (KB-003/4/5) are all `done`, so its **8 remaining `defined` features never become tickets** and the board goes idle.
