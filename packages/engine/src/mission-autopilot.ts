@@ -28,6 +28,7 @@ import type {
   MissionWithHierarchy,
   Slice,
   MissionEventType,
+  MissionFeature,
 } from "@fusion/core";
 
 /*
@@ -69,6 +70,25 @@ const DEFAULT_MAX_TASK_RETRIES = 3;
 
 /** Default cadence for mission consistency sweeps (5 minutes). */
 const DEFAULT_HEALTH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+
+/*
+FNXC:MissionValidatorLoop 2026-07-29-18:20:
+A feature whose fix-remediation lineage durably stopped (retry budget exhausted, or an
+operator-intervention stop — see MissionRemediationStoppedError / DEFAULT_IMPLEMENTATION_RETRY_BUDGET
+in async-mission-store.ts) is terminalized to status "blocked": no further automatic
+implementation/validation attempt will ever land on it. Slice/mission PROGRESSION must treat that
+the same as "done" — nothing is left to wait for — or a single unfixable feature wedges every later
+milestone/slice forever with the board silently going idle (HANDOFF: mission M-MS60X8XN-0003-0NTD had
+3 features stuck "in-progress" after their lineage exhausted its budget, so its 8 remaining "defined"
+features never became tickets). This predicate is deliberately narrower than "mission/slice complete"
+labeling: checkMissionCompletion and reconcileMissionConsistency's complete-slice staleness check both
+keep the strict done-only comparison on purpose, because a mission containing a blocked feature must
+never be reported "complete" (that would misreport a real failure as success) — only progression PAST
+it is unblocked. Shared so handleTaskCompletion, recoverStaleMission, and recoverMissions agree.
+*/
+function isFeatureSettledForAdvancement(feature: Pick<MissionFeature, "status">): boolean {
+  return feature.status === "done" || feature.status === "blocked";
+}
 
 /** Per-mission tracking state. */
 interface WatchedMissionState {
@@ -289,9 +309,9 @@ export class MissionAutopilot {
       // Successful completion resets retry budget for this specific task.
       this.perMissionTaskRetries.get(missionId)?.delete(taskId);
 
-      // Check if all features in the slice are done
+      // Check if all features in the slice have settled (done, or durably blocked — see isFeatureSettledForAdvancement).
       const features = await this.missionStore.listFeatures(slice.id);
-      const allDone = features.length > 0 && features.every((f) => f.status === "done");
+      const allDone = features.length > 0 && features.every(isFeatureSettledForAdvancement);
 
       if (allDone) {
         autopilotLog.log(`Slice ${slice.id} is complete — advancing mission ${missionId}`);
@@ -681,7 +701,7 @@ export class MissionAutopilot {
 
       if (activeSlices.length > 0) {
         const hasCompletedActiveSlice = activeSlices.some((slice) =>
-          slice.features.length > 0 && slice.features.every((feature) => feature.status === "done"),
+          slice.features.length > 0 && slice.features.every(isFeatureSettledForAdvancement),
         );
 
         if (hasCompletedActiveSlice) {
@@ -820,7 +840,7 @@ export class MissionAutopilot {
         const hasCompletedActiveSlice = refreshedHierarchy.milestones
           .flatMap((milestone) => milestone.slices)
           .filter((slice) => slice.status === "active")
-          .some((slice) => slice.features.length > 0 && slice.features.every((feature) => feature.status === "done"));
+          .some((slice) => slice.features.length > 0 && slice.features.every(isFeatureSettledForAdvancement));
 
         if (hasCompletedActiveSlice) {
           await this.advanceToNextSlice(mission.id);

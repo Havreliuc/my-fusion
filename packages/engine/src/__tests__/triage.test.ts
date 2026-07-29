@@ -2925,6 +2925,47 @@ describe("specified triage recovery", () => {
     );
   });
 
+  /*
+  FNXC:PlanReview 2026-07-29-17:40:
+  Regression for the HANDOFF-documented pre-release Plan Review deadlock: a card
+  recovered by self-healing (crashed mid-planning) must fire onSpecifyComplete just
+  like a live specifyTask finalize does, or the runtime never seeds the planning
+  continuation that dispatches the pre-release Plan Review — the card then sits in
+  "todo" with Plan Review enabled and unreviewable forever.
+  */
+  it("fires onSpecifyComplete after recovery so the pre-release Plan Review continuation gets seeded", async () => {
+    const onSpecifyComplete = vi.fn();
+    const store = createMockStore({
+      getSettings: vi.fn().mockResolvedValue({
+        maxConcurrent: 2,
+        maxWorktrees: 4,
+        pollIntervalMs: 10000,
+        groupOverlappingFiles: false,
+        autoMerge: true,
+        requirePlanApproval: false,
+      } as Settings),
+      parseDependenciesFromPrompt: vi.fn().mockResolvedValue([]),
+    });
+
+    const processor = new TriageProcessor(store, rootDir, { onSpecifyComplete });
+    const task = createTriageTask({
+      id: "FN-001",
+      description: "Recovered triage task",
+      status: "planning",
+      log: [
+        { timestamp: "2026-01-01T00:00:00.000Z", action: "Spec review requested" },
+        { timestamp: "2026-01-01T00:01:00.000Z", action: "Spec review: APPROVE" },
+      ],
+    });
+
+    const recovered = await processor.recoverApprovedTask(task);
+
+    expect(recovered).toBe(true);
+    expect(store.moveTask).toHaveBeenCalledWith("FN-001", "todo");
+    expect(onSpecifyComplete).toHaveBeenCalledTimes(1);
+    expect(onSpecifyComplete).toHaveBeenCalledWith(task);
+  });
+
   it("does not recover a prose-only partial planning draft into execution", async () => {
     await writeFile(
       join(rootDir, ".fusion", "tasks", "FN-001", "PROMPT.md"),

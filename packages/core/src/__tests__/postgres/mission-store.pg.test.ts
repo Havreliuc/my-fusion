@@ -575,12 +575,14 @@ pgTest("MissionStore (PostgreSQL backend mode)", () => {
     const milestone = await m.addMilestone(mission.id, { title: "MS" });
     const slice = await m.addSlice(milestone.id, { title: "SL" });
     const root = await m.addFeature(slice.id, { title: "F" });
+    const lineageIds = [root.id];
     let source = root;
     for (let attempt = 1; attempt <= 3; attempt++) {
       await m.transitionLoopState(source.id, "implementing");
       const run = await m.startValidatorRun(source.id, "scheduled");
       await m.completeValidatorRun(run.id, "failed", "deterministic failure");
       source = await m.createGeneratedFixFeature(source.id, run.id, [], "deterministic failure");
+      lineageIds.push(source.id);
       expect((await m.getFeature(root.id))?.implementationAttemptCount).toBe(attempt);
     }
     await m.transitionLoopState(source.id, "implementing");
@@ -589,6 +591,22 @@ pgTest("MissionStore (PostgreSQL backend mode)", () => {
     await expect(m.createGeneratedFixFeature(source.id, fourthRun.id, [], "deterministic failure"))
       .rejects.toThrow("MISSION_REMEDIATION_STOPPED: budget-exhausted");
     expect(await m.getFeature(root.id)).toMatchObject({ loopState: "blocked", implementationStopReason: "budget-exhausted", implementationAttemptCount: 3 });
+
+    /*
+    FNXC:MissionValidatorLoop 2026-07-29-18:20:
+    Regression for the HANDOFF-documented mission validator loop: exhausting the shared
+    lineage retry budget previously only flipped the ROOT's loopState — every feature row
+    in the chain (root + every generated Fix Feature, including the leaf whose 4th
+    validation triggered exhaustion) kept status:"in-progress" forever. MissionAutopilot's
+    slice-advancement gate requires every feature's status to settle to "done" or "blocked"
+    before the mission moves to its next slice/milestone, so a lineage stuck at
+    "in-progress" silently wedged the whole mission (mission M-MS60X8XN-0003-0NTD: 8
+    remaining "defined" features never became tickets). Every open lineage member —
+    root, both intermediate fixes, and the leaf — must settle to status "blocked".
+    */
+    for (const id of lineageIds) {
+      expect(await m.getFeature(id)).toMatchObject({ status: "blocked" });
+    }
   });
 
   it("records generated-task archive as a durable root stop before unlinking", async () => {

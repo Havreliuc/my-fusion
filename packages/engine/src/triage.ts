@@ -893,6 +893,26 @@ export class TriageProcessor {
         : "Auto-recovered specified task stuck in planning — moved to todo",
     });
 
+    /*
+    FNXC:PlanReview 2026-07-29-17:40:
+    `specifyTask`'s two finalize call sites both fire `onSpecifyComplete` right after
+    `finalizeApprovedTask` — that hook is what seeds the durable planning continuation
+    (`waitReason: "planning"`) the runtime drains to actually DISPATCH the pre-release
+    Plan Review for a card resting in the hold column (see InProcessRuntime's
+    onSpecifyComplete wiring). This recovery path (self-healing's un-stick for a task
+    that crashed mid-planning) called the same finalizeApprovedTask but never fired the
+    callback, so a recovered card could land in "todo" with Plan Review enabled and NO
+    continuation ever created for it: isUnplannedForExecution then waits forever for a
+    review result that nothing will ever produce (the HANDOFF-documented third deadlock
+    shape — enabled, unapproved, unreviewed — escapable only by an operator pressing
+    Promote, which bypasses the very review the gate exists to enforce). The callback
+    is safe to call unconditionally here, exactly as specifyTask does: it re-reads the
+    live task and no-ops unless the card's column now matches the Plan Review node's
+    column (i.e. it actually only fires post-release-to-todo, never for the
+    awaiting-approval branch above).
+    */
+    this.options.onSpecifyComplete?.(task);
+
     return true;
   }
 

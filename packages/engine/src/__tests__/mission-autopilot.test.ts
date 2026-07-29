@@ -370,6 +370,54 @@ describe("MissionAutopilot", () => {
       // Should not throw
       await autopilot.handleTaskCompletion("FN-001");
     });
+
+    /*
+    FNXC:MissionValidatorLoop 2026-07-29-18:20:
+    Regression for the HANDOFF-documented mission validator loop deadlock: a feature
+    whose fix-remediation lineage durably stopped (retry budget exhausted — see
+    async-mission-store.ts's createGeneratedFixFeature, which now terminalizes every
+    open lineage member to status "blocked") must count as settled for slice
+    advancement, exactly like "done" does. Before this fix, handleTaskCompletion's
+    `every(f => f.status === "done")` check meant a single "blocked" feature (the one
+    whose remediation is durably, correctly stopped) permanently wedged the mission —
+    the next slice's features never got triaged, and the board silently went idle.
+    */
+    it("advances to next slice when a feature is durably blocked (retry budget exhausted)", async () => {
+      const feature1 = createMockFeature({ id: "F-001", taskId: "FN-001", status: "done" });
+      const feature2 = createMockFeature({ id: "F-002", status: "blocked" });
+      const slice = createMockSlice({ id: "SL-001" });
+      const milestone = createMockMilestone();
+
+      missionStore.getFeatureByTaskId.mockReturnValue(feature1);
+      missionStore.getSlice.mockReturnValue(slice);
+      missionStore.getMilestone.mockReturnValue(milestone);
+      missionStore.listFeatures.mockReturnValue([feature1, feature2]);
+
+      const activatedSlice = createMockSlice({ id: "SL-002", status: "active" });
+      scheduler.activateNextPendingSlice.mockResolvedValue(activatedSlice);
+
+      await autopilot.watchMission("M-TEST1");
+
+      await autopilot.handleTaskCompletion("FN-001");
+      expect(scheduler.activateNextPendingSlice).toHaveBeenCalledWith("M-TEST1");
+    });
+
+    it("still withholds advancement while a feature is genuinely in-progress (not done or blocked)", async () => {
+      const feature1 = createMockFeature({ id: "F-001", taskId: "FN-001", status: "done" });
+      const feature2 = createMockFeature({ id: "F-002", status: "in-progress" });
+      const slice = createMockSlice({ id: "SL-001" });
+      const milestone = createMockMilestone();
+
+      missionStore.getFeatureByTaskId.mockReturnValue(feature1);
+      missionStore.getSlice.mockReturnValue(slice);
+      missionStore.getMilestone.mockReturnValue(milestone);
+      missionStore.listFeatures.mockReturnValue([feature1, feature2]);
+
+      await autopilot.watchMission("M-TEST1");
+
+      await autopilot.handleTaskCompletion("FN-001");
+      expect(scheduler.activateNextPendingSlice).not.toHaveBeenCalled();
+    });
   });
 
   describe("handleTaskFailure", () => {
