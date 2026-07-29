@@ -96,9 +96,41 @@ describe("branch-assignment", () => {
   });
 
   it("derives per-task branches", () => {
-    expect(derivePerTaskBranchName("feature/planning", "FN-123 add parser")).toBe("feature/planning/fn-123-add-parser");
+    expect(derivePerTaskBranchName("feature/planning", "FN-123 add parser")).toBe("feature/planning-fn-123-add-parser");
     expect(derivePerTaskBranchName(undefined, "FN-123")).toBeUndefined();
     expect(derivePerTaskBranchName("feature/planning", "   ")).toBe("feature/planning");
+  });
+
+  /*
+  FNXC:BranchAssignment 2026-07-29-14:55:
+  Invariant, not the single repro: a derived working branch must never be a path-CHILD of its
+  base. The base is a live branch ref (a file at refs/heads/<base>), so a child ref cannot be
+  created — git rejects the directory/file conflict and the task can never get a branch or
+  worktree. Covers every derivation surface (the raw helper plus both assignment modes that
+  derive) and every base shape (single-segment like `main`, nested like `feature/auth`).
+  */
+  it("never derives a working branch nested under its base branch", () => {
+    const bases = ["main", "master", "develop", "feature/auth", "release/1.2"];
+    const segments = ["FN-123 add parser", "f-ms605w2c-0007-18mf", "Fix Login"];
+
+    for (const base of bases) {
+      for (const segment of segments) {
+        const derived = derivePerTaskBranchName(base, segment);
+        expect(derived).toBeDefined();
+        expect(derived).not.toBe(base);
+        expect(derived!.startsWith(`${base}/`)).toBe(false);
+
+        for (const assignmentMode of ["shared", "per-task-derived"] as const) {
+          const { workingBranch } = resolveEntryPointBranchAssignment({
+            assignmentMode,
+            resolvedBranch: base,
+            taskSegment: segment,
+          });
+          expect(workingBranch).toBeDefined();
+          expect(workingBranch!.startsWith(`${base}/`)).toBe(false);
+        }
+      }
+    }
   });
 
   it("derives auto task branches", () => {
@@ -114,7 +146,7 @@ describe("branch-assignment", () => {
       taskSegment: "FN-123 add parser",
     });
     expect(assignment).toEqual({
-      workingBranch: "feature/planning/fn-123-add-parser",
+      workingBranch: "feature/planning-fn-123-add-parser",
       mergeTargetBranch: "feature/planning",
     });
     expect(assignment.workingBranch).not.toBe(resolvedBranch);
@@ -148,7 +180,7 @@ describe("branch-assignment", () => {
       resolvedBranch: "feature/planning",
       taskSegment: "FN-123 add parser",
     })).toEqual({
-      workingBranch: "feature/planning/fn-123-add-parser",
+      workingBranch: "feature/planning-fn-123-add-parser",
       mergeTargetBranch: undefined,
     });
   });

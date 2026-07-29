@@ -99,12 +99,24 @@ function normalizeOptionalBranch(value: string | undefined): string | undefined 
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/*
+FNXC:BranchAssignment 2026-07-29-14:55:
+Per-task working branches are SIBLINGS of their base (`<base>-<segment>`), never children
+(`<base>/<segment>`). Git refs are files: with a real branch `main`, the ref `refs/heads/main`
+is a file, so `refs/heads/main/f-0007` would require `main` to also be a directory — git
+refuses that directory/file conflict and branch creation fails. In shared mode the base IS a
+live branch (it is the merge target), so the child form was unbuildable for EVERY member.
+Observed: a mission created branch group `main`, its member task got `main/f-ms605w2c-0007-18mf`,
+no branch or worktree could be created, and the card sat in Todo forever while self-healing
+swept around it. The sibling form is safe for both shapes: `main` -> `main-f-0007`, and
+`feature/auth` -> `feature/auth-f-0007` (a sibling inside the existing `feature/` directory).
+*/
 export function derivePerTaskBranchName(sharedBranch: string | undefined, taskSegment: string): string | undefined {
   const base = normalizeOptionalBranch(sharedBranch);
   if (!base) return undefined;
   const segment = sanitizeBranchSegment(taskSegment);
   if (!segment) return base;
-  return `${base}/${segment}`;
+  return `${base}-${segment}`;
 }
 
 export function deriveAutoTaskBranchName(taskId: string, shortName: string): string {
