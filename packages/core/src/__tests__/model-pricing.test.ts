@@ -97,6 +97,30 @@ describe("model-pricing", () => {
     }
   });
 
+  it("prices the GA Gemini 3.x models instead of reporting unavailable", () => {
+    // FNXC:ModelCatalog 2026-07-30-19:20: gemini-2.0-flash was fully
+    // deprecated by Google (real API 404), and this catalog predated the
+    // Gemini 3.x family entirely until it was added — this guards that the
+    // four GA 3.x models price correctly rather than falling back silently
+    // to "unavailable". Rates: ai.google.dev/gemini-api/docs/pricing.
+    const cases = [
+      ["gemini-3.6-flash", 3.0],
+      ["gemini-3.5-flash", 3.3],
+      ["gemini-3.5-flash-lite", 0.8],
+      ["gemini-3.1-flash-lite", 0.55],
+    ] as const;
+
+    for (const [model, expectedUsd] of cases) {
+      const result = costFor(
+        { ...ZERO, inputTokens: 1_000_000, outputTokens: 200_000 },
+        { provider: "google", model },
+      );
+      expect(result.unavailable, model).toBe(false);
+      expect(result.usd, model).not.toBeNull();
+      expect(result.usd, model).toBeCloseTo(expectedUsd, 2);
+    }
+  });
+
   it("prices Codex mini latest instead of reporting unavailable", () => {
     // codex-mini-latest: input $1.50/1M, output $6/1M, cached input $0.375/1M.
     const result = costFor(
@@ -269,6 +293,9 @@ describe("model-pricing", () => {
     it("falls back to a bare model id when provider is unset", () => {
       expect(lookupPricing({ model: "gemini-2.5-pro" })).toBe(
         MODEL_PRICING["google:gemini-2.5-pro"],
+      );
+      expect(lookupPricing({ model: "gemini-3.6-flash" })).toBe(
+        MODEL_PRICING["google:gemini-3.6-flash"],
       );
       expect(lookupPricing({ model: "kimi-k2.6-preview" })).toBe(
         MODEL_PRICING["kimi-coding:kimi-k2.6-preview"],
