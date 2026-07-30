@@ -514,6 +514,25 @@ import {
 
 const MAX_TRANSIENT_GRAPH_RESUME_RETRIES = 2;
 const TRANSIENT_GRAPH_RESUME_RETRY_BACKOFF_MS = process.env.VITEST || process.env.NODE_ENV === "test" ? 0 : 1_000;
+/*
+FNXC:PlanReviewProviderFailureRetry 2026-07-30-09:00:
+Plan Review's "worktree missing on disk, run from repo root" fallback (the normal shape
+before a task's own worktree has been allocated) shares ONE session-registry path — the
+bare repo root — across every task hitting that fallback. When two tasks queue Plan
+Review moments apart (routine in an autopilot mission dispatching tasks back-to-back),
+the second genuinely has to wait for the first task's real AI session to finish and
+release that shared path — that can take many seconds to low minutes, not milliseconds.
+The shared MAX_TRANSIENT_GRAPH_RESUME_RETRIES/TRANSIENT_GRAPH_RESUME_RETRY_BACKOFF_MS
+budget (2 attempts, 1s apart — tuned for engine-internal pause/resume races) exhausts in
+about 2 seconds, far too fast to survive that contention. Once exhausted, nothing resets
+graphResumeRetryCount short of the task's whole graph completing, so the task was stuck
+until an operator noticed and an engine restart ran recoverInProgressLimbo (startup-only)
+to un-wedge it — observed live: KB-021 held for 20+ minutes behind KB-020's already-
+finished session. This branch gets its own, longer, escalating budget instead of widening
+the shared engine-internal one.
+*/
+const MAX_PLAN_REVIEW_PROVIDER_FAILURE_RETRIES = 6;
+const PLAN_REVIEW_PROVIDER_FAILURE_BACKOFF_BASE_MS = process.env.VITEST || process.env.NODE_ENV === "test" ? 0 : 5_000;
 /** How long to wait before recovering a completed task still stuck in in-progress. */
 const COMPLETED_TASK_WATCHDOG_MS = 60_000;
 /** How long to wait before retrying a workflow rerun handoff that never reached in-progress. */
@@ -9983,9 +10002,9 @@ export class TaskExecutor {
          * plan-replan or overwrite a progressed card's column, worktree, or steps.
          */
         const priorRetries = live.graphResumeRetryCount ?? 0;
-        if (priorRetries < MAX_TRANSIENT_GRAPH_RESUME_RETRIES) {
+        if (priorRetries < MAX_PLAN_REVIEW_PROVIDER_FAILURE_RETRIES) {
           const nextRetries = priorRetries + 1;
-          const message = `Plan Review provider failure — retrying in place (${nextRetries}/${MAX_TRANSIENT_GRAPH_RESUME_RETRIES})`;
+          const message = `Plan Review provider failure — retrying in place (${nextRetries}/${MAX_PLAN_REVIEW_PROVIDER_FAILURE_RETRIES})`;
           executorLog.warn(`${task.id}: ${message}`);
           await this.store.logEntry(task.id, message, undefined, this.getRunContextFor(task.id));
           await this.store.updateTask(task.id, {
@@ -9996,7 +10015,9 @@ export class TaskExecutor {
               executorLog.error(`Failed Plan Review provider retry for ${task.id}:`, err),
             );
           };
-          const handle = setTimeout(scheduleRetry, TRANSIENT_GRAPH_RESUME_RETRY_BACKOFF_MS);
+          // Linear backoff (5s, 10s, 15s, ... up to 30s) — enough for a sibling task's
+          // real AI session on the same shared path to plausibly finish and release it.
+          const handle = setTimeout(scheduleRetry, PLAN_REVIEW_PROVIDER_FAILURE_BACKOFF_BASE_MS * nextRetries);
           handle.unref?.();
         } else {
           const message = "Plan Review provider retry budget exhausted — task remains held in its current state";
