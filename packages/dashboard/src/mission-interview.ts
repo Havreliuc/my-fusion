@@ -737,6 +737,26 @@ export function parseMissionAgentResponse(text: string): MissionInterviewRespons
     }
   }
 
+  /*
+  FNXC:MissionInterview 2026-07-30-16:00:
+  gemini-2.5-flash was observed returning the completion payload directly at
+  the top level ({"missionTitle":...,"milestones":[...]}) instead of wrapped
+  in the {"type":"complete","data":{...}} envelope this prompt instructs —
+  a prompt-adherence difference from whichever model this parser was
+  originally tuned against. Accept the unwrapped shape as a fallback rather
+  than failing mission creation outright when a model is less strict about
+  the envelope but still returns a valid plan.
+  */
+  if (
+    typeof parsed === "object" &&
+    parsed !== null &&
+    !("type" in parsed) &&
+    "milestones" in parsed &&
+    Array.isArray((parsed as Record<string, unknown>).milestones)
+  ) {
+    return { type: "complete", data: parsed as unknown as MissionPlanSummary } as MissionInterviewResponse;
+  }
+
   diagnostics.error("Invalid response structure from AI", { parsedSnippet: JSON.stringify(parsed).slice(0, 500), operation: "parse-validate" });
   throw new Error("AI returned an invalid response structure. Please try again.");
 }

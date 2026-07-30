@@ -384,6 +384,42 @@ export const MODEL_PRICING: Readonly<Record<string, ModelPricing>> = {
     cacheWritePer1M: 1.25,
     source: "ai.google.dev/gemini-api/docs/pricing",
   },
+  /*
+   * FNXC:ModelCatalog 2026-07-30-16:00:
+   * gemini-2.0-flash was fully deprecated/shut down by Google (real API 404:
+   * "no longer available") — this fork's catalog predates the Gemini 3.x
+   * family entirely (zero prior references anywhere in the codebase), which
+   * left GA-since-2026-07-21 models unpriced. Adding the four GA Gemini 3.x
+   * models here (excludes gemini-3.1-pro, still preview-only as of writing).
+   */
+  "google:gemini-3.6-flash": {
+    inputPer1M: 1.5,
+    outputPer1M: 7.5,
+    cacheReadPer1M: 0.15,
+    cacheWritePer1M: 1.5,
+    source: "ai.google.dev/gemini-api/docs/pricing",
+  },
+  "google:gemini-3.5-flash": {
+    inputPer1M: 1.5,
+    outputPer1M: 9,
+    cacheReadPer1M: 0.15,
+    cacheWritePer1M: 1.5,
+    source: "ai.google.dev/gemini-api/docs/pricing",
+  },
+  "google:gemini-3.5-flash-lite": {
+    inputPer1M: 0.3,
+    outputPer1M: 2.5,
+    cacheReadPer1M: 0.03,
+    cacheWritePer1M: 0.3,
+    source: "ai.google.dev/gemini-api/docs/pricing",
+  },
+  "google:gemini-3.1-flash-lite": {
+    inputPer1M: 0.25,
+    outputPer1M: 1.5,
+    cacheReadPer1M: 0.025,
+    cacheWritePer1M: 0.25,
+    source: "ai.google.dev/gemini-api/docs/pricing",
+  },
 
   /*
    * FNXC:ModelCatalog 2026-07-11-23:02:
