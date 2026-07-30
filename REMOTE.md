@@ -163,10 +163,80 @@ here** — it lives only in `~/my-fusion/.env` on the VM itself (gitignored, loc
 Postgres, never committed), per `FOREMAN.md`'s secrets policy.
 
 Not yet done, out of scope for this pass: a persistent systemd unit (the app currently only
-runs in the foreground of an SSH session and dies on disconnect), a GitHub credential (only
-needed once agents push branches / open PRs against a real target repo — `my-fusion` itself
-is public), and Vertex/Gemini AI wiring (`testMode: true` is the recommended way to exercise
-the dashboard/engine without any AI credentials at all).
+runs in the foreground of an SSH session and dies on disconnect).
+
+**AI is now configured for real** (updated 2026-07-30, supersedes the `testMode: true`
+guidance above): `~/.fusion/settings.json` on the VM has `defaultProvider: "google"`,
+`testMode: false`, and a real Google AI Studio key was added via the dashboard's **Secrets**
+view (not recorded here — never put in this file, per `FOREMAN.md`'s secrets policy).
+`defaultModelId` was `gemini-2.0-flash`, which Google has since fully deprecated (real API
+404: *"models/gemini-2.0-flash is no longer available"*) — fixed to `gemini-2.5-flash` via
+direct edit of `~/.fusion/settings.json` on the VM. **The running dashboard process may still
+have the old value cached in memory** — confirm by checking whether it was restarted after
+that edit; if not, restart it (find the `node packages/cli/bin.mjs dashboard` PID, kill it,
+relaunch the same command) before assuming the model fix is live.
+
+GitHub is set up: `gh` is authenticated on the VM as a dedicated bot account
+(`havreliuc-cloud`, not the operator's personal GitHub identity — deliberately, to avoid
+exposing personal credentials on this VM). Verify with `gh auth status`.
+
+## Active investigation — `KB-002` failing on the `first` project (opened 2026-07-30)
+
+**For another Claude instance picking this up**: this is an open, unresolved investigation.
+Everything below is what's been established so far and where the trail goes cold — pick up
+from "Where to look next," don't just re-derive the same dead end.
+
+**What's on screen**: the dashboard UI (via the SSH tunnel, see Access above) shows a task
+`KB-002`, title *"Resolve pnpm approve-builds issue by interactively approving esbuild build
+scripts"*, status **FAILED**, "Workflow graph terminated with failure at node
+`steps#0:step...`", 0/6 steps complete, under a project the UI shows as `first`. This looks
+like a real infrastructure issue (pnpm's build-script approval gate blocking `esbuild`, a
+package with a native postinstall step) surfaced autonomously during some other task's
+`pnpm install` — a different class of problem from the Gemini model/parsing issues
+documented above, not related to those fixes.
+
+**Project registry state, confirmed via direct query** (same pattern used throughout this
+doc — SSH in, `PGPASSWORD='<vm-postgres-password>' psql -U fusion -h localhost -d fusion -c
+"<query>"`):
+
+- `central.projects` currently has **exactly one row**: `proj_c2468217be884f09`, name
+  `first`, path `/home/havreliuc_calosense_com/first`.
+- The **original `my-fusion` project (`proj_c63af413acfc4fad`) is gone** from this table —
+  confirmed present earlier in this same session, confirmed absent on the most recent check.
+  No `archive.projects` table exists (checked) — this isn't a soft-delete, the row is just
+  not there. This mirrors an identical drop-out seen on the **local** machine for `my-fusion`
+  and `ai-work` (both still have valid `.fusion/project.json` markers on disk, neither is in
+  the local `central.projects` table either) — likely the same underlying bug, not a
+  coincidence, but the actual cause hasn't been found on either machine.
+- `proj_c2468217be884f09` is the **same ID** that appeared as an unexplained "phantom"
+  project reference twice earlier in this session (once via a stale browser URL showing VM
+  content, once as a real 500-error-causing reference on the local instance) — at both of
+  those points it did not exist in either machine's `central.projects`. The working theory:
+  a project-creation flow reserves/exposes the ID client-side (URL, in-memory state) before
+  the row is actually persisted, so it's visible as a "phantom" before it's visible as real —
+  but this is inferred, not confirmed by reading the actual registration code path.
+
+**Dead end so far**: `SELECT id, title, status, error FROM project.tasks WHERE project_id =
+'proj_c2468217be884f09'` returns **zero rows**, despite `KB-002` being visibly rendered in
+the UI under that project right now. Same zero-row result filtering by `id LIKE '%KB-002%'`
+or title.
+
+**Where to look next** (not yet tried):
+- Query `project.tasks` with no `WHERE` filter at all and inspect every row's actual
+  `project_id` value — the UI might be associating the task with `first` while the row is
+  actually still scoped to the vanished `proj_c63af413acfc4fad`, or some other id.
+- Check `project.workflow_run_step_instances` and `project.workflow_steps` (both exist per
+  earlier schema listing) — the failure is workflow-graph-shaped ("terminated at node
+  `steps#0:step...`"), so the actual error detail likely lives in one of these, not in
+  `project.tasks.error`.
+- Check `central.task_claims` (exists per earlier schema listing) for anything referencing
+  this task.
+- Check whether the dashboard process's own stdout/stderr (the terminal running
+  `node packages/cli/bin.mjs dashboard`) has the real error logged — the DB may simply not
+  be where this particular failure detail is recorded.
+- Confirm current `central.projects` state fresh before trusting anything above — this is a
+  live, actively-changing system and rows have already been observed appearing/disappearing
+  within this same session.
 
 ## Known caveats / open items
 
