@@ -609,6 +609,50 @@ pgTest("MissionStore (PostgreSQL backend mode)", () => {
     }
   });
 
+  /*
+  FNXC:MissionValidatorLoop 2026-07-30-09:00:
+  Regression for a second, live-observed gap in the same lineage machinery: when a LATER
+  generated fix in a lineage genuinely passes, reconcileSupersededGeneratedFixFeatures must
+  supersede every ancestor up to and including the lineage ROOT. The prior implementation
+  iterated candidates checking "do I have a passed ancestor", gated on
+  `!feature.generatedFromFeatureId` — a root always fails that guard (it has no ancestor of
+  its own), so a root that had exhausted its retry budget (loopState:"blocked") before a
+  later generation went on to pass was never superseded and stayed status:"in-progress"
+  forever, permanently blocking MissionAutopilot's isFeatureSettledForAdvancement gate
+  (observed live: mission M-MS7775AX's "Core count(content)" root stayed in-progress even
+  after its "Fix:" generation passed validation).
+  */
+  it("supersedes the lineage root, not just intermediate fixes, when a later generation passes", async () => {
+    const m = missions();
+    const mission = await m.createMission({ title: "Root supersession" });
+    const milestone = await m.addMilestone(mission.id, { title: "MS" });
+    const slice = await m.addSlice(milestone.id, { title: "SL" });
+    const root = await m.addFeature(slice.id, { title: "F" });
+
+    await m.transitionLoopState(root.id, "implementing");
+    const run1 = await m.startValidatorRun(root.id, "scheduled");
+    await m.completeValidatorRun(run1.id, "failed", "deterministic failure");
+    const fix1 = await m.createGeneratedFixFeature(root.id, run1.id, [], "deterministic failure");
+
+    await m.transitionLoopState(fix1.id, "implementing");
+    const run2 = await m.startValidatorRun(fix1.id, "scheduled");
+    await m.completeValidatorRun(run2.id, "failed", "deterministic failure");
+    const fix2 = await m.createGeneratedFixFeature(fix1.id, run2.id, [], "deterministic failure");
+
+    await m.transitionLoopState(fix2.id, "implementing");
+    const run3 = await m.startValidatorRun(fix2.id, "scheduled");
+    // completeValidatorRun's own "passed" branch calls reconcileSupersededGeneratedFixFeatures —
+    // exercised here exactly as the real validation pipeline invokes it, not called directly.
+    await m.completeValidatorRun(run3.id, "passed", "all assertions satisfied");
+    // Mirrors mission-execution-loop.ts's handleValidationPass, which sets status:"done" on
+    // the directly-passing feature as a SEPARATE call after completeValidatorRun returns.
+    await m.updateFeatureStatus(fix2.id, "done");
+
+    expect(await m.getFeature(fix2.id)).toMatchObject({ status: "done", loopState: "passed", lastValidatorStatus: "passed" });
+    expect(await m.getFeature(fix1.id)).toMatchObject({ status: "done", loopState: "passed", lastValidatorStatus: "passed" });
+    expect(await m.getFeature(root.id)).toMatchObject({ status: "done", loopState: "passed", lastValidatorStatus: "passed" });
+  });
+
   it("records generated-task archive as a durable root stop before unlinking", async () => {
     /*
     FNXC:MissionLineageBudget 2026-07-22-15:30:

@@ -1155,6 +1155,54 @@ describe("MissionExecutionLoop", () => {
       expect(systemPrompt).toContain("linked feature contract assertions");
     });
 
+    /*
+    FNXC:MissionValidationDiagnostics 2026-07-30-09:00:
+    Regression: the validator prompt must expose each assertion's real id, or the
+    model has no way to echo back the exact "assertionId" the response schema
+    demands — every validation silently failed with "Validator omitted linked
+    assertion result." regardless of the judge's actual verdict.
+    */
+    it("shows the real assertionId for every listed assertion so the model can echo it back", () => {
+      const feature = createMockFeature({
+        id: "F-IDCHECK",
+        title: "Feature needing id-visible assertions",
+      });
+      const assertions = [
+        {
+          id: "CA-REAL-ID-1",
+          milestoneId: "MS-1",
+          title: "First assertion",
+          assertion: "Does the first thing",
+          status: "pending" as const,
+          orderIndex: 0,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: "CA-REAL-ID-2",
+          milestoneId: "MS-1",
+          title: "Second assertion",
+          assertion: "Does the second thing",
+          status: "pending" as const,
+          orderIndex: 1,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ];
+
+      loop = new MissionExecutionLoop({
+        taskStore: taskStore as any,
+        missionStore: missionStore as any,
+        rootDir: "/tmp",
+      });
+
+      const prompt = (loop as any).buildValidationPrompt(feature, assertions, "feature");
+
+      expect(prompt).toContain("CA-REAL-ID-1");
+      expect(prompt).toContain("CA-REAL-ID-2");
+      expect(prompt).toContain("copy it verbatim");
+    });
+
     it("does NOT create a board task for single-feature validation", async () => {
       const feature = createMockFeature({ loopState: "implementing", taskId: "FN-001", sliceId: "SL-001" });
       missionStore._setFeature(feature);

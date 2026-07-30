@@ -1367,8 +1367,19 @@ export class MissionExecutionLoop extends EventEmitter {
     assertions: MissionContractAssertion[],
     scope: "feature" | "milestone" = "feature",
   ): string {
+    /*
+    FNXC:MissionValidationDiagnostics 2026-07-30-09:00:
+    Every entry must carry its real assertionId (CA-...) — the response schema below
+    requires the model to echo that exact id back, but a plain 1/2/3 ordinal gave the
+    model no way to know it. Every validator run was silently failing every assertion
+    ("Validator omitted linked assertion result.") regardless of the judge's actual
+    verdict, because extractAssertionResults's strict authoritativeIds.has(assertionId)
+    check drops any id the model never saw and therefore couldn't reproduce — the
+    mission's fix-remediation lineage then burned its whole retry budget on features
+    that may have been correctly implemented from the first attempt.
+    */
     const assertionTexts = assertions
-      .map((a, i) => `${i + 1}. **${a.title}**: ${a.assertion}`)
+      .map((a) => `- assertionId: ${a.id}\n  ${a.title}: ${a.assertion}`)
       .join("\n");
 
     const subject = scope === "milestone" ? "milestone rollup" : `feature "${feature.title}"`;
@@ -1386,7 +1397,7 @@ Respond with a JSON object in this format:
   "status": "pass|fail|blocked",
   "assertions": [
     {
-      "assertionId": "CA-...",
+      "assertionId": "<the exact assertionId value listed above for this assertion — copy it verbatim, never invent or renumber it>",
       "verdict": "pass|fail|blocked",
       "passed": true|false,
       "message": "Explanation for this verdict",
@@ -1399,7 +1410,7 @@ Respond with a JSON object in this format:
   "blockedReason": "Reason if status is blocked"
 }
 
-Be thorough and objective. If any assertion fails, the overall status should be "fail".`;
+Include exactly one entry in "assertions" for every assertionId listed above — no more, no fewer — using each assertionId verbatim. Be thorough and objective. If any assertion fails, the overall status should be "fail".`;
   }
 
   /**
