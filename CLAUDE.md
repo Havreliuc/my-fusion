@@ -1,3 +1,4 @@
 @AGENTS.md
 @FOREMAN.md
 @HANDOFF.md
+@REMOTE.md
