@@ -1,0 +1,25 @@
+[Unit]
+# FNXC:RemoteDeploy 2026-07-30-22:10:
+# Persistent dashboard supervision for remote (e.g. GCP test VM) deployments —
+# see REMOTE.md. Fixes two problems observed running the dashboard as a bare
+# foreground SSH process: (1) it died on SSH/terminal disconnect, and (2)
+# manual restarts risked a second instance racing for port 4040, falling
+# back to a random port with no supervision and a broken PATH for merge-time
+# subprocess spawns. This is a systemd --user unit (no root/sudo needed to
+# run it) paired with `loginctl enable-linger` so it survives logout too.
+Description=Fusion/Foreman dashboard
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/my-fusion
+ExecStart=%h/my-fusion/deploy/systemd/run-dashboard.sh
+Restart=on-failure
+RestartSec=5
+# Prevent a crash-loop from spinning forever; surface as a failed unit instead.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Install]
+WantedBy=default.target
