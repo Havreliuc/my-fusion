@@ -155,15 +155,51 @@ EOF
 cd ~/my-fusion
 pnpm install
 pnpm build
-pnpm --filter @runfusion/fusion exec fn serve --port 4040 --host 127.0.0.1
+
+# Persistent dashboard supervision (systemd --user unit) — survives SSH
+# disconnect and auto-restarts on crash. See deploy/systemd/ for the unit
+# file and wrapper script; this replaces running `fn serve`/`dashboard`
+# directly in a foreground SSH session.
+./deploy/systemd/install.sh
 ```
 
 The actual Postgres password used on the current `execution-test` VM is **not recorded
 here** — it lives only in `~/my-fusion/.env` on the VM itself (gitignored, localhost-only
 Postgres, never committed), per `FOREMAN.md`'s secrets policy.
 
-Not yet done, out of scope for this pass: a persistent systemd unit (the app currently only
-runs in the foreground of an SSH session and dies on disconnect).
+### Dashboard process supervision
+
+`deploy/systemd/` (checked into this repo) installs the dashboard as a `systemd --user`
+unit rather than a bare foreground process:
+
+- `fusion-dashboard.service` — the unit definition (`Restart=on-failure`, `RestartSec=5`,
+  a `StartLimitBurst` so a genuine crash-loop surfaces as a failed unit instead of spinning
+  forever).
+- `run-dashboard.sh` — sources nvm and activates the repo's pinned `.nvmrc` version before
+  exec'ing the dashboard, so every child process the engine spawns (verification *and*
+  merge-time `pnpm`/`node` calls) inherits a correct `PATH`. A prior incident (2026-07-30)
+  had the dashboard manually relaunched over a non-interactive SSH command with a minimal
+  inherited PATH — verification steps worked (they export `PATH` themselves) but merge-time
+  dependency sync failed with `pnpm: not found`, and repeated manual relaunches raced for
+  port 4040, with the loser silently falling back to a random port nothing pointed at.
+- `install.sh` — idempotent; symlinks the unit into `~/.config/systemd/user/`, reloads,
+  enables + starts it, and runs `sudo loginctl enable-linger "$USER"` so the unit keeps
+  running after the SSH session that installed it ends (without lingering, a user unit stops
+  the moment your last session logs out).
+
+Re-run `./deploy/systemd/install.sh` after `git pull` if the unit or wrapper script changed.
+Useful commands:
+
+```bash
+systemctl --user status fusion-dashboard.service
+systemctl --user restart fusion-dashboard.service
+journalctl --user -u fusion-dashboard.service -f
+```
+
+Before this existed, restarting meant manually finding and killing the `node
+packages/cli/bin.mjs dashboard` PID and relaunching the same command by hand — the source of
+several stray-duplicate-process incidents earlier in the VM's history. Prefer
+`systemctl --user restart` now; don't hand-launch the dashboard directly.
 
 **AI is now configured for real** (updated 2026-07-30, supersedes the `testMode: true`
 guidance above): `~/.fusion/settings.json` on the VM has `defaultProvider: "google"`,
@@ -242,7 +278,8 @@ or title.
 
 - IAP access blocked on missing `setIamPolicy` permission (see Access, above).
 - Direct-access firewall rule depends on a dynamic residential IP that will eventually change.
-- No systemd unit yet — the dashboard process dies when the SSH session closes.
-- No GitHub token or Vertex AI credentials configured on this VM yet.
+- No Vertex AI credentials configured on this VM yet (real AI runs via a Google AI Studio key
+  instead — see the AI-configured note above, and `FOREMAN.md`'s Vertex-only constraint this
+  interim setup violates).
 - This is a test/throwaway setup on a live company project, not the personal-credit-funded
   deployment `FOREMAN.md` describes as the long-term target.
