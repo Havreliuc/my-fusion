@@ -1892,17 +1892,36 @@ export class AsyncMissionStore extends EventEmitter<MissionStoreEvents> {
       missingSourceIds = [...new Set(sources.map((source) => source.generatedFromFeatureId).filter((id): id is string => Boolean(id) && !byId.has(id!)))];
     }
     const passed = (feature?: MissionFeature) => feature?.lastValidatorStatus === "passed" || feature?.loopState === "passed";
-    const hasPassedAncestor = (feature: MissionFeature, seen = new Set<string>()): boolean => {
-      const sourceId = feature.generatedFromFeatureId;
-      if (!sourceId || seen.has(sourceId)) return false;
-      seen.add(sourceId);
-      const source = byId.get(sourceId);
-      return passed(source) || (source ? hasPassedAncestor(source, seen) : false);
-    };
+    /*
+    FNXC:MissionValidatorLoop 2026-07-30-09:00:
+    Walk UP from every feature that itself passed, superseding every ancestor in its
+    lineage — including the ROOT, which has no generatedFromFeatureId of its own. The
+    prior version iterated candidates and asked "do I have a passed ancestor", gated on
+    `!feature.generatedFromFeatureId` — a root fails that guard unconditionally, so a
+    root that exhausted its retry budget (loopState:"blocked") before a LATER generated
+    fix in its own lineage went on to pass was never superseded: it sat status:
+    "in-progress" forever. MissionAutopilot's isFeatureSettledForAdvancement requires
+    every feature in a slice to reach "done" or "blocked" before the slice can advance,
+    so that stranded root silently wedged the whole mission even after its own bug was
+    genuinely fixed by a descendant (observed live: mission M-MS7775AX's "Core count
+    (content)" root stayed in-progress after its "Fix:" generation passed validation).
+    */
     const ids: string[] = [];
+    const superseded = new Set<string>();
     for (const feature of features) {
-      if (!feature.generatedFromFeatureId || !(passed(feature) || hasPassedAncestor(feature))) continue;
-      if (feature.status !== "done" || feature.loopState !== "passed" || feature.lastValidatorStatus !== "passed" || feature.taskId) ids.push(feature.id);
+      if (!passed(feature)) continue;
+      let cursor = feature.generatedFromFeatureId ? byId.get(feature.generatedFromFeatureId) : undefined;
+      const seen = new Set<string>();
+      while (cursor && !seen.has(cursor.id)) {
+        seen.add(cursor.id);
+        if (!superseded.has(cursor.id)) {
+          superseded.add(cursor.id);
+          if (cursor.status !== "done" || cursor.loopState !== "passed" || cursor.lastValidatorStatus !== "passed" || cursor.taskId) {
+            ids.push(cursor.id);
+          }
+        }
+        cursor = cursor.generatedFromFeatureId ? byId.get(cursor.generatedFromFeatureId) : undefined;
+      }
     }
     if (ids.length > 0) {
       const now = new Date().toISOString();
