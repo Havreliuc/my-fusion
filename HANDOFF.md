@@ -11,9 +11,23 @@ Updated 2026-08-05 (fourth session). Read `FOREMAN.md` for constraints; this fil
 - **Version: stable v0.74.0** (2026-08-05). `main` is a single `init` commit of the stock v0.74.0 tree plus 13 fork commits — the same flattened, decoupled shape as before, re-based on 0.74. 14 commits total. No upstream remote, no upstream history.
 - **Database**: local Homebrew PostgreSQL 18, database **`fusion073`** (name kept, now on 0.74's schema), via `DATABASE_URL` in the repo-root `.env` (gitignored; loaded by our `.env` loader in `scripts/dev-with-memory.mjs`). Migrated in place to schema baseline **`0042`** on 2026-08-05; pre-upgrade dump at `~/projects/claude/downloads/fusion073-pre-0.74.sql` (121 MB, 136 tables → 143 after).
 - **Node 22.22.2** pinned in `.nvmrc` (machine default stays Node 20). Launch: `nvm use && pnpm dev dashboard`, then the printed `Open:` URL.
-- **Provider (INTERIM — violates FOREMAN's Vertex constraint)**: `defaultProvider: google` (AI Studio key), model `gemini-3.6-flash`. Vertex rejects API keys outright (401, needs OAuth/ADC). Still the top open item.
-- **Sandbox project** `pipeline-sandbox` at `/Users/eduard/projects/pipeline-sandbox` (`proj_73697c56ec8a4f0e` in the central registry) — used to validate the pipeline, not real work.
-- **Not yet re-verified after the upgrade**: the dashboard has not been booted against the migrated database, and no task or mission has been run on 0.74. Everything below marked "confirmed live" was confirmed on 0.73.0.
+- **Provider (INTERIM — violates FOREMAN's Vertex constraint)**: `defaultProvider: google` (AI Studio key). Vertex rejects API keys outright (401, needs OAuth/ADC). Still the top open item. Note the model that actually ran on 2026-08-05 was **`gemini-3.5-flash`**, not the `gemini-3.6-flash` this file previously recorded — check the resolved lane models before assuming.
+- **Sandbox project** `pipeline-sandbox` at `/Users/eduard/projects/pipeline-sandbox` (`proj_73697c56ec8a4f0e` in the central registry) — used to validate the pipeline, not real work. **Left `active` (unpaused) as of 2026-08-05**; it will run as soon as an engine boots.
+- **`my-fusion` is now a registered project** (`proj_f61c742e544a4db2`, created 2026-08-05) — created accidentally, because `fn serve` **auto-registers the cwd project by default**. It is set to `status='paused'` so no runtime starts for it. Either remove it (`fn project remove my-fusion`) or leave it paused, but never let it run: agents would operate on the Foreman repo itself. **Always pass `--no-auto-register` when running `fn serve`/`fn daemon` from inside this checkout.**
+
+### 0.74 verified end to end (2026-08-05)
+
+Task **KB-025** ("Add an MIT LICENSE file…") ran the full pipeline on 0.74 against the migrated database, in `pipeline-sandbox`:
+
+`created → planning (real Gemini session) → awaiting-approval → Approve Plan → stranded-hold reconciliation re-seeds Plan Review → Plan Review APPROVE → scheduler dispatch → in-progress → execution → in-review → Code Review APPROVE → squash-merge → done`
+
+Landed as `94db672` on the sandbox's `main`: `LICENSE` + `test/license.test.js`, 40 insertions, diff exactly matching the declared `## File Scope`. Both pre-merge gates recorded `passed`/`APPROVE`. Cost ≈ **1.54M tokens** (500k input + 16k output + 1.03M cached) for one trivial task.
+
+Two fork fixes were confirmed *in production*, not just by unit test:
+- **approve-plan clears the status sentinel** — after Approve Plan, `status` went to NULL and the card dispatched. On stock 0.74 it would still read `awaiting-approval` and never move.
+- **dropping our `onSpecifyComplete` patch was correct** — the log shows `Specification finished without a handoff (parked) — no plan review armed`, then `Stranded hold continuation … self-healing reconciliation will re-seed Plan Review`, and it did. Upstream's `evaluateStrandedHoldContinuation` covers the case our patch used to force.
+
+Not exercised by this run: the sibling-branch fix (a standalone task uses `deriveAutoTaskBranchName` → `fusion/kb-025`; the `${base}-${segment}` path needs a **mission with a shared branch group**), and the mission lineage/supersession fixes.
 
 ### Proven end to end on 0.73.0 (2026-07-30, historical)
 
@@ -70,6 +84,16 @@ These were fork-local fixes on 0.73.0. On 0.74 they are upstream's, implemented 
 
 See `/Users/eduard/.claude/projects/-Users-eduard-projects-my-fusion/memory/foreman-orphaned-local-project-cleanup.md` for the full writeup (not duplicated here). Short version: `pipeline-sandbox` was opened once before being registered in the central project registry, ran under a deterministic fallback id (`local-<sha256(rootDir)>`), and created 3 tasks there before the real registration the next day created a parallel, unrelated KB-series. The stale allocator row for that orphaned id (`next_sequence=1`, stale relative to its own 3 tasks) tripped the integrity check. Confirmed via `\d project.tasks` that the real primary key is composite `(project_id, id)` — no actual collision risk, just confusing leftover state. Deleted (operator-approved) the 3 orphaned task rows and the 1 stale allocator row. The *detector's* cross-project global scan design (a comment in `packages/core/src/task-store/async-allocator.ts` claims `tasks.id` is a global PK, which is incorrect against the actual schema) is a known, deliberately-deferred follow-up — not touched. **Line numbers in that memory refer to 0.73.0; re-locate the comment on 0.74 before acting.**
 
+## Cost trap (2026-08-05) — `--paused` does not stop durable agent heartbeats
+
+**`fn dashboard --paused` / `fn serve --paused` pauses task automation but NOT durable-agent heartbeats.** Measured on a paused boot: five agents (CEO on `greet-cli`, `send-sms-generated`, `tetris`, plus `iOS Developer` and `Dev-01`) ran 7 timer-driven heartbeats in 3m22s — ~457k input + 12.7k output + 1.86M cache-read tokens, roughly **$1 in three minutes, ≈$19/hour to sit idle**. During the 8-minute KB-025 run the heartbeats cost about as much as the task itself.
+
+This sits badly against FOREMAN's "guardrails go in code, not prompts" constraint: the pause switch does not stop spend. Before any long engine session, either delete the idle agents or pause the projects that own them (`UPDATE central.projects SET status='paused' WHERE …`).
+
+**`--project <name>` does not scope the engine.** `fn serve --project pipeline-sandbox` still logged `Starting engines for 5 registered project(s)` and created a runtime per project. The flag picks a *primary* project only; there is no single-project engine mode. Pausing the other projects is the only lever.
+
+Related: a project with `status='paused'` in `central.projects` makes `fn serve --project <that project>` exit 1 with `Error: Project <id> is paused`.
+
 ## Operating rule (2026-07-30) — engine lockfile / multiple stray dev-server instances
 
 `pnpm dev dashboard` uses a 3-level process chain (`pnpm dev dashboard` → `node scripts/dev-with-memory.mjs dashboard` → the actual tsx-loaded dashboard binary) **and** a per-project `.fusion/engine.lock` that refuses to start a second engine for the same project on the machine. Restarting "the dashboard" repeatedly can fail to pick up code changes, because:
@@ -90,13 +114,16 @@ See `/Users/eduard/.claude/projects/-Users-eduard-projects-my-fusion/memory/fore
 
 ## Next actions, in order
 
-1. **Boot 0.74 against the migrated database and re-verify the pipeline.** Nothing has been run on 0.74 yet. Check the two breaking changes above land sanely (per-project capacity numbers; spawned agents now counted), and confirm `~/.fusion/settings.json` still validates against 0.74's settings schema.
-2. **The credit check** (unchanged, highest priority): make Vertex work via ADC (`gcloud auth application-default login`), switch `defaultProvider` back to `google-vertex`, verify spend lands in GCP billing.
-3. **Push to `Havreliuc/my-fusion`.** `main` is 14 commits with an unrelated root to the published history, so this is a **force-push**; `origin/main`'s 17 old commits are preserved locally at `pre-0.74-main`. Push that tag first if the old history should survive on the remote. Not done yet.
-4. **Upgrade the VM** (`REMOTE.md` → `execution-test`): same rebase, same migrations, then re-run `./deploy/systemd/install.sh`.
-5. **Configure the roster** — roles onto lanes with per-lane models.
-6. **Remote access** — Tailscale + `tailscale serve`; verify on a phone.
-7. *(Optional, low priority)* Fix `async-allocator.ts`'s cross-project global-scan design tension (see the orphaned-project section above) — deliberately deferred, not urgent.
+1. **The credit check** (highest priority): make Vertex work via ADC (`gcloud auth application-default login`), switch `defaultProvider` back to `google-vertex`, verify spend lands in GCP billing.
+2. **Stop the idle heartbeat burn** — see the cost trap above. Decide which of the five durable agents on `greet-cli`/`send-sms-generated`/`tetris` should still exist; delete or pause the rest. At ~$19/hour of idle spend this outranks most feature work.
+3. **Resolve the accidental `my-fusion` project registration** — currently paused; remove it unless you want a Foreman-on-Foreman board.
+4. **Run a mission end to end on 0.74.** KB-025 covered the single-task path; the mission path (shared branch groups, validator loop, lineage supersession) is where four of the carried fork fixes live and none of them were exercised. Also still unverified: the two 0.74 breaking changes (per-project capacity numbers; spawned agents counted against Max Concurrent Tasks).
+5. **Upgrade the VM** (`REMOTE.md` → `execution-test`): same rebase, same migrations, then re-run `./deploy/systemd/install.sh`. Still on 0.73.
+6. **Configure the roster** — roles onto lanes with per-lane models.
+7. **Remote access** — Tailscale + `tailscale serve`; verify on a phone.
+8. *(Optional, low priority)* Fix `async-allocator.ts`'s cross-project global-scan design tension (see the orphaned-project section above) — deliberately deferred, not urgent.
+
+Done 2026-08-05: pushed to `Havreliuc/my-fusion` (force-push over the old flattened history; `origin/main` = local `main`, and the pre-upgrade history is preserved on the remote as tag `pre-0.74-main`).
 
 ## Don't
 
