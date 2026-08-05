@@ -67,8 +67,8 @@ counterpart possible.
 | 15 | `35c3969f3` | systemd dashboard supervision | clean | **CARRY** | ✅ `4cb012b764` |
 | 16 | `76bc3ed47` | `GEMINI_API_KEY` dedupe in dev runner | clean | **KEEP** | ✅ `e2902fd009` |
 
-Net: **6 KEEP · 4 DROP · 3 SPLIT · 4 CARRY** → 16 local commits replayed as **12**, plus the
-docs commit that adds this ledger = 13 fork commits on `main`.
+Net: **5 KEEP · 4 DROP · 3 SPLIT · 4 CARRY** = 16 → replayed as **12** (5 + 3 + 4), plus the
+docs commits that add this ledger and the verification writeup.
 
 ## Re-flatten (required before pushing)
 
