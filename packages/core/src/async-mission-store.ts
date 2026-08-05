@@ -1693,6 +1693,52 @@ export class AsyncMissionStore extends EventEmitter<MissionStoreEvents> {
     return current;
   }
 
+  /*
+  FNXC:MissionValidatorLoop 2026-07-29-18:20:
+  When a fix-remediation lineage durably stops (retry budget exhausted, or an operator-intervention
+  stop recorded in mission_lineage_stops), every OPEN (non-done, non-blocked) feature in that lineage
+  — the root plus every generated Fix Feature down to the leaf that just failed — must be terminalized
+  to status "blocked". Before this, only the root's loopState/implementationStopReason were updated;
+  every feature row (including the leaf whose validation triggered the stop) kept status:"in-progress"
+  forever. mission-autopilot.ts's slice-advancement gate (isFeatureSettledForAdvancement) requires
+  every feature in a slice to reach "done" or "blocked" before the mission moves to the next
+  slice/milestone — an open "in-progress" feature therefore wedged mission progression permanently,
+  with no error surfaced (HANDOFF: mission M-MS60X8XN-0003-0NTD's 8 remaining "defined" features never
+  became tickets because the board silently went idle behind one exhausted lineage). Walks the same
+  generatedFromFeatureId pointers as resolveFixRoot, which already proved this chain acyclic and
+  complete moments earlier in the same transaction.
+  */
+  private async terminalizeOpenLineageChain(
+    handle: QueryHandle,
+    leaf: MissionFeature,
+    rootId: string,
+    now: string,
+  ): Promise<string[]> {
+    const chain: MissionFeature[] = [leaf];
+    let current = leaf;
+    while (current.id !== rootId && current.generatedFromFeatureId) {
+      const parent = await getFeature(handle, current.generatedFromFeatureId);
+      if (!parent) break;
+      chain.push(parent);
+      current = parent;
+    }
+    const toBlock = chain.filter((feature) => feature.status !== "done" && feature.status !== "blocked");
+    if (toBlock.length === 0) return [];
+    await handle.update(schema.project.missionFeatures).set({
+      status: "blocked",
+      updatedAt: now,
+    }).where(inArray(schema.project.missionFeatures.id, toBlock.map((feature) => feature.id)));
+    return toBlock.map((feature) => feature.id);
+  }
+
+  /** Post-commit best-effort `feature:updated` fan-out for a set of feature ids (deduped). */
+  private async emitFeatureUpdatedFor(featureIds: string[]): Promise<void> {
+    for (const id of new Set(featureIds)) {
+      const feature = await getFeature(this.db, id).catch(() => undefined);
+      if (feature) this.emit("feature:updated", feature);
+    }
+  }
+
   private async getRootStop(handle: QueryHandle, rootFeatureId: string) {
     const rows = await handle.select().from(schema.project.missionLineageStops)
       .where(and(eq(schema.project.missionLineageStops.projectId, missionProjectId()), eq(schema.project.missionLineageStops.rootFeatureId, rootFeatureId)));
@@ -1721,8 +1767,8 @@ export class AsyncMissionStore extends EventEmitter<MissionStoreEvents> {
     const outcome = await this.layer.transactionImmediate(async (tx): Promise<
       | { kind: "existing"; feature: MissionFeature }
       | { kind: "created"; feature: MissionFeature }
-      | { kind: "exhausted" }
-      | { kind: "stopped"; reason: string }
+      | { kind: "exhausted"; blockedFeatureIds: string[] }
+      | { kind: "stopped"; reason: string; blockedFeatureIds: string[] }
     > => {
       const locked = await tx
         .select({ id: schema.project.missionFeatures.id })
@@ -1746,9 +1792,13 @@ export class AsyncMissionStore extends EventEmitter<MissionStoreEvents> {
       const lockedRoot = await getFeature(tx, root.id);
       if (!lockedRoot) throw new Error("MISSION_LINEAGE_UNRESOLVED: canonical root disappeared");
       const durableStop = await this.getRootStop(tx, root.id);
-      if (durableStop) return { kind: "stopped", reason: durableStop.reason };
+      if (durableStop) {
+        const blockedFeatureIds = await this.terminalizeOpenLineageChain(tx, source, root.id, now);
+        return { kind: "stopped", reason: durableStop.reason, blockedFeatureIds };
+      }
       if (lockedRoot.loopState === "blocked") {
-        return { kind: "stopped", reason: lockedRoot.implementationStopReason ?? "legacy-unknown-stop" };
+        const blockedFeatureIds = await this.terminalizeOpenLineageChain(tx, source, root.id, now);
+        return { kind: "stopped", reason: lockedRoot.implementationStopReason ?? "legacy-unknown-stop", blockedFeatureIds };
       }
 
       const exactId = await findFixFeatureId(tx, sourceFeatureId, runId);
@@ -1770,7 +1820,8 @@ export class AsyncMissionStore extends EventEmitter<MissionStoreEvents> {
           implementationStopOrigin: "retry-budget",
           updatedAt: now,
         });
-        return { kind: "exhausted" };
+        const blockedFeatureIds = await this.terminalizeOpenLineageChain(tx, source, root.id, now);
+        return { kind: "exhausted", blockedFeatureIds };
       }
 
       const feature: MissionFeature = {
@@ -1808,11 +1859,15 @@ export class AsyncMissionStore extends EventEmitter<MissionStoreEvents> {
     });
     if (outcome.kind === "existing") return outcome.feature;
     if (outcome.kind === "exhausted") {
-      const updatedSource = await getFeature(this.db, sourceFeatureId);
-      if (updatedSource) this.emit("feature:updated", updatedSource);
+      // FNXC:MissionValidatorLoop 2026-07-29-18:20: emit for every lineage member
+      // terminalizeOpenLineageChain blocked (root + every generated fix down to the
+      // leaf), not just sourceFeatureId, so dashboard/SSE consumers see every
+      // affected row settle out of "in-progress".
+      await this.emitFeatureUpdatedFor([sourceFeatureId, ...outcome.blockedFeatureIds]);
       throw new MissionRemediationStoppedError("budget-exhausted");
     }
     if (outcome.kind === "stopped") {
+      await this.emitFeatureUpdatedFor([sourceFeatureId, ...outcome.blockedFeatureIds]);
       throw new MissionRemediationStoppedError(
         outcome.reason === "budget-exhausted" || outcome.reason === "operator-intervention"
           ? outcome.reason
