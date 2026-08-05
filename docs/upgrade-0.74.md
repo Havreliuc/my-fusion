@@ -50,25 +50,54 @@ counterpart possible.
 
 | # | Commit | Concern | Cherry-pick onto 0.74 | Verdict | Replayed as |
 |---|---|---|---|---|---|
-| 1 | `dd754e34e` | `.env` loader + approve/reject-plan `status` sentinel + LFS strip + FOREMAN docs | clean | **KEEP** | ✅ `281144b04` |
-| 2 | `0bb3c6c45` | sibling per-task branch names | clean | **KEEP** | ✅ `23f811942` |
-| 3 | `e0b077c1d` | createTask workflow selection **+** `.nvmrc` pin **+** AGENTS.md port-4040 override | conflict: `task-creation.ts` | **SPLIT** | ✅ `1ccc5435d` (fork halves only) |
+| 1 | `dd754e34e` | `.env` loader + approve/reject-plan `status` sentinel + LFS strip + FOREMAN docs | clean | **KEEP** | ✅ `0f1912da19` |
+| 2 | `0bb3c6c45` | sibling per-task branch names | clean | **KEEP** | ✅ `15f3f9f4b1` |
+| 3 | `e0b077c1d` | createTask workflow selection **+** `.nvmrc` pin **+** AGENTS.md port-4040 override | conflict: `task-creation.ts` | **SPLIT** | ✅ `6eca1bbb33` (fork halves only) |
 | 4 | `4793c4e6c` | changeset for #3 | clean | **DROP** (follows #3) | ⊘ skipped |
 | 5 | `fe5c23cea` | pre-release Plan Review hold satisfiable | conflict: test only | **DROP** | ⊘ skipped |
 | 6 | `505272520` | hold-release sweep honors plan approval | conflict: `hold-release.ts` | **DROP** | ⊘ skipped |
-| 7 | `9f3084a5c` | docs (HANDOFF) | clean | **CARRY** | ✅ `9085ac4d7` |
-| 8 | `e16cccb65` | docs (HANDOFF) | clean | **CARRY** | ✅ `5bca51952` |
-| 9 | `179f5fa6d` | mission lineage terminalization **+** triage deadlock | conflict: `triage.ts` only | **SPLIT** | ✅ `14b906ef2` (lineage only) |
-| 10 | `8a2257bef` | root supersession **+** validator assertionId prompt | conflict: `mission-execution-loop.ts` only | **SPLIT** | ✅ `27adae28a` (supersession only) |
+| 7 | `9f3084a5c` | docs (HANDOFF) | clean | **CARRY** | ✅ `ded3415ba0` |
+| 8 | `e16cccb65` | docs (HANDOFF) | clean | **CARRY** | ✅ `05c1e28aad` |
+| 9 | `179f5fa6d` | mission lineage terminalization **+** triage deadlock | conflict: `triage.ts` only | **SPLIT** | ✅ `d0853cfbea` (lineage only) |
+| 10 | `8a2257bef` | root supersession **+** validator assertionId prompt | conflict: `mission-execution-loop.ts` only | **SPLIT** | ✅ `1c2b3e925f` (supersession only) |
 | 11 | `0a321d03f` | Plan Review provider-failure retry budget | conflict: `executor.ts` | **DROP** | ⊘ skipped |
-| 12 | `c28593df6` | docs (HANDOFF) | clean | **CARRY** | ✅ `0464a30cf` |
-| 13 | `05f5160ee` | Gemini 3.x pricing + mission-interview parse + REMOTE.md | clean | **KEEP** | ✅ `ea9e41fda` |
-| 14 | `6234d2f43` | AI config + model-pricing tests | clean | **KEEP** | ✅ `4b924356d` |
-| 15 | `35c3969f3` | systemd dashboard supervision | clean | **CARRY** | ✅ `33fa43fec` |
-| 16 | `76bc3ed47` | `GEMINI_API_KEY` dedupe in dev runner | clean | **KEEP** | ✅ `d16a4f174` |
+| 12 | `c28593df6` | docs (HANDOFF) | clean | **CARRY** | ✅ `e22a49ee02` |
+| 13 | `05f5160ee` | Gemini 3.x pricing + mission-interview parse + REMOTE.md | clean | **KEEP** | ✅ `9a37a2f6f5` |
+| 14 | `6234d2f43` | AI config + model-pricing tests | clean | **KEEP** | ✅ `1fa7cb0caf` |
+| 15 | `35c3969f3` | systemd dashboard supervision | clean | **CARRY** | ✅ `4cb012b764` |
+| 16 | `76bc3ed47` | `GEMINI_API_KEY` dedupe in dev runner | clean | **KEEP** | ✅ `e2902fd009` |
 
-Net: **6 KEEP · 4 DROP · 3 SPLIT · 4 CARRY** → 16 local commits replayed as **12** on top of
-`v0.74.0`, on branch `upgrade/0.74`.
+Net: **6 KEEP · 4 DROP · 3 SPLIT · 4 CARRY** → 16 local commits replayed as **12**, plus the
+docs commit that adds this ledger = 13 fork commits on `main`.
+
+## Re-flatten (required before pushing)
+
+The replay above was done on top of upstream's **real** `v0.74.0` history, which is correct —
+git needs the true ancestry to 3-way-merge each fork commit against the right base, and that
+is what made every conflict land precisely on an upstream-fixed file.
+
+But it leaves `main` carrying 13126 upstream commits. `origin/main` holds the old flattened
+history, so the two roots are unrelated and git reports **13139 ahead / 17 behind** — an
+unpushable diff, and it silently undoes the decoupling flatten `FOREMAN.md` describes.
+
+Fix: build a parentless commit holding the stock 0.74.0 tree, then rebase the fork commits
+onto it. Trees are identical on both sides, so this never conflicts.
+
+```bash
+git tag main-upstream-history-0.74 main            # keep the un-flattened result
+NEWINIT=$(git commit-tree upstream-v0.74.0^{tree} -F /path/to/init-message.txt)
+GIT_LFS_SKIP_SMUDGE=1 git rebase --onto $NEWINIT upstream-v0.74.0 main
+git diff --stat main-upstream-history-0.74 main    # MUST be empty
+```
+
+Result: `main` = 14 commits (`init` + 13), byte-identical tree.
+
+**Do this on every future upgrade**: rebase against real upstream history, then re-flatten
+before pushing. Rebasing directly onto a synthetic flattened base instead would give git the
+wrong merge base and turn clean 3-way merges into whole-file conflicts.
+
+Note this rewrites every fork commit SHA a second time — the ledger's "Replayed as" column
+and `HANDOFF.md`'s fix table record the **post-flatten** SHAs.
 
 ## Replay result — verified 2026-08-05
 

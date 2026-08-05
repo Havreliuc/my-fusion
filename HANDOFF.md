@@ -8,7 +8,7 @@ Updated 2026-08-05 (fourth session). Read `FOREMAN.md` for constraints; this fil
 
 ## Current state — upgraded to 0.74.0
 
-- **Version: stable v0.74.0** (2026-08-05). `main` is now upstream's `v0.74.0` history with 12 fork commits replayed on top. This replaces the previous single-`init`-commit flatten — see the upgrade section below for what changed and why.
+- **Version: stable v0.74.0** (2026-08-05). `main` is a single `init` commit of the stock v0.74.0 tree plus 13 fork commits — the same flattened, decoupled shape as before, re-based on 0.74. 14 commits total. No upstream remote, no upstream history.
 - **Database**: local Homebrew PostgreSQL 18, database **`fusion073`** (name kept, now on 0.74's schema), via `DATABASE_URL` in the repo-root `.env` (gitignored; loaded by our `.env` loader in `scripts/dev-with-memory.mjs`). Migrated in place to schema baseline **`0042`** on 2026-08-05; pre-upgrade dump at `~/projects/claude/downloads/fusion073-pre-0.74.sql` (121 MB, 136 tables → 143 after).
 - **Node 22.22.2** pinned in `.nvmrc` (machine default stays Node 20). Launch: `nvm use && pnpm dev dashboard`, then the printed `Open:` URL.
 - **Provider (INTERIM — violates FOREMAN's Vertex constraint)**: `defaultProvider: google` (AI Studio key), model `gemini-3.6-flash`. Vertex rejects API keys outright (401, needs OAuth/ADC). Still the top open item.
@@ -27,7 +27,9 @@ Full working ledger, including per-fix evidence and the exact replay commands, i
 
 Upstream 0.74.0 is 975 commits ahead of 0.73.0 and **independently fixed five of the nine local bugs this fork was carrying** — in every case at a deeper root cause than our patch. Those five were dropped rather than ported; carrying them forward would have fought upstream's own rewrite of the same functions. 16 local commits became 12.
 
-**Safety refs**: the pre-upgrade `main` is preserved at tag `pre-0.74-main` (`76bc3ed478`). Upstream tags are local refs `upstream-v0.73.0` / `upstream-v0.74.0` — fetched one-shot by URL, **no remote was added**, so FOREMAN's decoupling rule still holds.
+**History shape**: the replay was first done on top of upstream's real `v0.74.0` history (13139 commits) so git could 3-way-merge each fork commit against the correct base, then flattened back to a single `init` commit holding the stock 0.74.0 tree. The flatten is byte-identical to the un-flattened result — it only drops upstream's commit objects, which is what keeps `origin` pushable. Do the same on the next upgrade: **rebase against real upstream history, then re-flatten before pushing.**
+
+**Safety refs**: pre-upgrade `main` at tag `pre-0.74-main` (`76bc3ed478`); the un-flattened 0.74 replay at tag `main-upstream-history-0.74`; upstream tags as local refs `upstream-v0.73.0` / `upstream-v0.74.0` — fetched one-shot by URL, **no remote was added**, so FOREMAN's decoupling rule still holds.
 
 Verified green on the replayed tree: lint, typecheck, build, `pnpm test:gate` (751 passed), `pnpm smoke:boot`, plus the targeted suites for every kept fix.
 
@@ -40,16 +42,16 @@ Verified green on the replayed tree: lint, typecheck, build, `pnpm test:gate` (7
 
 | Commit | Defect |
 |---|---|
-| `281144b046` | approve-plan/reject-plan passed `status: undefined`; cards kept `awaiting-approval` and never dispatched. **Still broken in stock 0.74** (verified). Also adds the `.env` loader. |
-| `23f811942b` | mission tasks got branch `main/f-<id>` (git cannot nest a ref under the existing `main` file). Now `main-f-<id>`. **Still broken in stock 0.74** (verified — `derivePerTaskBranchName` still returns `${base}/${segment}`). |
-| `1ccc5435d7` | `.nvmrc` Node 22.22.2 pin (absent from upstream entirely) + the AGENTS.md port-4040 fork override. |
-| `14b906ef2c` | mission fix-lineage rows stayed `in-progress` forever on retry-budget exhaustion, and autopilot's slice-advancement gates required every feature `done`, which a blocked feature can never satisfy. `terminalizeOpenLineageChain` + `isFeatureSettledForAdvancement`. |
-| `27adae28a2` | root-supersession gap in `reconcileSupersededGeneratedFixFeatures` — a lineage ROOT could never be superseded, so an exhausted root blocked advancement forever. |
-| `ea9e41fdac` | Gemini 3.x model pricing (catalog predated the family entirely) + mission-interview accepts an unwrapped completion payload. |
-| `4b924356d0` | AI config + model-pricing tests. |
-| `33fa43fec1` | systemd dashboard supervision for the VM (`deploy/systemd/`). |
-| `d16a4f1746` | `GEMINI_API_KEY` / `GOOGLE_API_KEY` duplicate-warning suppression in the dev runner. |
-| `9085ac4d77` `5bca519520` `0464a30cff` | docs (this file's history). |
+| `0f1912da19` | approve-plan/reject-plan passed `status: undefined`; cards kept `awaiting-approval` and never dispatched. **Still broken in stock 0.74** (verified). Also adds the `.env` loader. |
+| `15f3f9f4b1` | mission tasks got branch `main/f-<id>` (git cannot nest a ref under the existing `main` file). Now `main-f-<id>`. **Still broken in stock 0.74** (verified — `derivePerTaskBranchName` still returns `${base}/${segment}`). |
+| `6eca1bbb33` | `.nvmrc` Node 22.22.2 pin (absent from upstream entirely) + the AGENTS.md port-4040 fork override. |
+| `d0853cfbea` | mission fix-lineage rows stayed `in-progress` forever on retry-budget exhaustion, and autopilot's slice-advancement gates required every feature `done`, which a blocked feature can never satisfy. `terminalizeOpenLineageChain` + `isFeatureSettledForAdvancement`. |
+| `1c2b3e925f` | root-supersession gap in `reconcileSupersededGeneratedFixFeatures` — a lineage ROOT could never be superseded, so an exhausted root blocked advancement forever. |
+| `9a37a2f6f5` | Gemini 3.x model pricing (catalog predated the family entirely) + mission-interview accepts an unwrapped completion payload. |
+| `1fa7cb0caf` | AI config + model-pricing tests. |
+| `4cb012b764` | systemd dashboard supervision for the VM (`deploy/systemd/`). |
+| `e2902fd009` | `GEMINI_API_KEY` / `GOOGLE_API_KEY` duplicate-warning suppression in the dev runner. |
+| `ded3415ba0` `05c1e28aad` `e22a49ee02` | docs (this file's history). |
 
 ## Now owned by upstream — do not re-fix these here
 
@@ -90,7 +92,7 @@ See `/Users/eduard/.claude/projects/-Users-eduard-projects-my-fusion/memory/fore
 
 1. **Boot 0.74 against the migrated database and re-verify the pipeline.** Nothing has been run on 0.74 yet. Check the two breaking changes above land sanely (per-project capacity numbers; spawned agents now counted), and confirm `~/.fusion/settings.json` still validates against 0.74's settings schema.
 2. **The credit check** (unchanged, highest priority): make Vertex work via ADC (`gcloud auth application-default login`), switch `defaultProvider` back to `google-vertex`, verify spend lands in GCP billing.
-3. **Decide the remote-history question.** `main` now carries upstream's 975 commits, partly undoing the original decoupling flatten. Either accept that, or re-flatten to a fresh `init` at 0.74. Either way, pushing to `Havreliuc/my-fusion` is a **force-push over published history** — not done yet.
+3. **Push to `Havreliuc/my-fusion`.** `main` is 14 commits with an unrelated root to the published history, so this is a **force-push**; `origin/main`'s 17 old commits are preserved locally at `pre-0.74-main`. Push that tag first if the old history should survive on the remote. Not done yet.
 4. **Upgrade the VM** (`REMOTE.md` → `execution-test`): same rebase, same migrations, then re-run `./deploy/systemd/install.sh`.
 5. **Configure the roster** — roles onto lanes with per-lane models.
 6. **Remote access** — Tailscale + `tailscale serve`; verify on a phone.
