@@ -38,6 +38,20 @@ if (existsSync(envFilePath)) {
   }
 }
 
+/*
+FNXC:DevEnvFile 2026-08-04-19:55:
+@google/genai's getApiKeyFromEnv() warns "Both GOOGLE_API_KEY and GEMINI_API_KEY are set.
+Using GOOGLE_API_KEY." on EVERY client construction — once per agent session — flooding the
+dev TUI log. The operator's shell exports both with an identical value, so the duplicate
+carries no information. Drop GEMINI_API_KEY for the dev process (and the inheriting CLI
+child) only when GOOGLE_API_KEY is present and identical; ~/.zshrc stays untouched for other
+tools that read GEMINI_API_KEY by name (see the note in ~/.zshenv). When GEMINI_API_KEY is
+the only key set it is left alone — it is then the sole credential.
+*/
+if (process.env.GOOGLE_API_KEY && process.env.GEMINI_API_KEY === process.env.GOOGLE_API_KEY) {
+  delete process.env.GEMINI_API_KEY;
+}
+
 // Set increased heap size (8GB) to prevent OOM during initial build/start
 const MEMORY_MB = process.env.FUSION_DEV_MEMORY_MB || "8192";
 
