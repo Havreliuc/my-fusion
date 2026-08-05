@@ -47,10 +47,13 @@ Upstream 0.74.0 is 975 commits ahead of 0.73.0 and **independently fixed five of
 
 Verified green on the replayed tree: lint, typecheck, build, `pnpm test:gate` (751 passed), `pnpm smoke:boot`, plus the targeted suites for every kept fix.
 
-### Two breaking changes from 0.74 to watch for
+### The two breaking changes, assessed against this install (2026-08-05)
 
-1. The **machine-wide concurrency cap is gone** — capacity is now two numbers per project.
-2. **Spawned child agents count against Max Concurrent Tasks** (`maxSpawnedAgentsPerParent` / `maxSpawnedAgentsGlobal` deleted). Previously children were counted by neither capacity gate despite each getting its own worktree.
+1. **Machine-wide concurrency cap removed** — capacity is now two numbers per project (`maxConcurrent`, `maxWorktrees`). **No impact here**: `globalMaxConcurrent` was never set in global or project settings. Upstream deleted it because the slot bookkeeping behind it (`acquireGlobalSlot`/`releaseGlobalSlot`) had no production callers — the counters were fiction, which is why the cap never visibly bound. Migration `0037` drops the now-unread `central.global_concurrency` table. Nothing to do.
+
+2. **Spawned child agents now count against `maxConcurrent`.** This one is real. Previously `fn_spawn_agent` children were counted by *neither* capacity gate despite each getting its own worktree, governed instead by `maxSpawnedAgentsPerParent` (5) and `maxSpawnedAgentsGlobal` (20); 0.74 deletes both keys. Effect: a parent that used to run alongside up to 5 children now shares the project's `maxConcurrent` slots with them, so fan-out serializes. Current caps: `greet-cli` **1**, `send-sms-generated` **2**, `tetris` **2**, `pipeline-sandbox` default (2).
+
+   The two deleted keys were still stored (and silently ignored) on those three projects — exactly the "readable-but-ignored settings key" trap upstream's own migration note calls out. **Removed 2026-08-05**; backup of the prior settings JSON was taken before the delete. If you use spawned child agents, raise `maxConcurrent` on those projects before the next run.
 
 ## Local fixes still carried (12 commits, all with regression tests)
 
@@ -117,7 +120,8 @@ Related: a project with `status='paused'` in `central.projects` makes `fn serve 
 1. **The credit check** (highest priority): make Vertex work via ADC (`gcloud auth application-default login`), switch `defaultProvider` back to `google-vertex`, verify spend lands in GCP billing.
 2. **Stop the idle heartbeat burn** — see the cost trap above. Decide which of the five durable agents on `greet-cli`/`send-sms-generated`/`tetris` should still exist; delete or pause the rest. At ~$19/hour of idle spend this outranks most feature work.
 3. **Resolve the accidental `my-fusion` project registration** — currently paused; remove it unless you want a Foreman-on-Foreman board.
-4. **Run a mission end to end on 0.74.** KB-025 covered the single-task path; the mission path (shared branch groups, validator loop, lineage supersession) is where four of the carried fork fixes live and none of them were exercised. Also still unverified: the two 0.74 breaking changes (per-project capacity numbers; spawned agents counted against Max Concurrent Tasks).
+4. **Run a mission end to end on 0.74.** KB-025 covered the single-task path; the mission path (shared branch groups, validator loop, lineage supersession) is where four of the carried fork fixes live and none of them were exercised.
+   - Only remaining breaking-change question: **do you use spawned child agents?** If yes, a fan-out task will now serialize against `maxConcurrent` — verify before trusting a parallel workflow. If no, both 0.74 breaking changes are closed (see the assessment above).
 5. **Upgrade the VM** (`REMOTE.md` → `execution-test`): same rebase, same migrations, then re-run `./deploy/systemd/install.sh`. Still on 0.73.
 6. **Configure the roster** — roles onto lanes with per-lane models.
 7. **Remote access** — Tailscale + `tailscale serve`; verify on a phone.
